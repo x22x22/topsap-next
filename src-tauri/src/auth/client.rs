@@ -175,6 +175,70 @@ impl AuthClient {
         normalize_login(&value, &self.host, self.port)
     }
 
+    /// 账号已在别处登录时，按原客户端状态机踢出旧会话并重新取回登录会话。
+    /// 原客户端在 `-40077` 后重新请求 `auth_param`，再以同一组
+    /// `U/HASH/S_CODE` 请求 `/vone/login/user_pswd_r`。
+    pub async fn kick_user(&mut self) -> Result<LoginSession, AuthError> {
+        self.probe().await?;
+
+        let base64_user = encode_user(&self.user);
+        self.http.upsert_cookies(&[("sv_un", &base64_user)]);
+        let body = kick_login_body(&self.user, &self.hash, &self.s_code);
+        let referer = format!("https://{}/vone/login/user_pswd_r/", self.host);
+        let response = self
+            .http
+            .request(
+                "POST",
+                "/vone/login/user_pswd_r",
+                Some(body.as_bytes()),
+                &[
+                    ("Referer", &referer),
+                    ("Content-Type", "application/x-www-form-urlencoded"),
+                ],
+            )
+            .await?;
+
+        let text = response.text();
+        let value = parse_gateway_json(&response, &text)?;
+        let ret = read_ret(&value)
+            .or_else(|| {
+                response
+                    .header("X-sv-ret")
+                    .and_then(|value| value.trim().parse::<i32>().ok())
+            })
+            .ok_or_else(|| {
+                AuthError::BadJson(format!("响应缺少 Ret 字段：{}", truncate(&text, 200)))
+            })?;
+
+        if ret != 0 {
+            if ret == -40039 {
+                return Err(AuthError::NeedSms {
+                    challenge: read_bool(&value, "sms_challenge"),
+                    sms_time: self.sms_time(&value),
+                });
+            }
+            if matches!(ret, -40022 | -40023 | -40024 | -40199) {
+                let user = value
+                    .get("user_name")
+                    .and_then(|v| v.as_str())
+                    .filter(|text| !text.trim().is_empty())
+                    .unwrap_or(&self.user)
+                    .to_string();
+                return Err(AuthError::PasswordChangeRequired { code: ret, user });
+            }
+            let gateway_msg = value
+                .get("ErrMsg")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            return Err(AuthError::Rejected {
+                code: ret,
+                message: gateway_error_message(ret, gateway_msg),
+            });
+        }
+
+        normalize_login(&value, &self.host, self.port)
+    }
+
     /// 短信 / 企业微信动态验证码登录
     pub async fn login_by_sms(&mut self, user: &str, sms: &str) -> Result<LoginSession, AuthError> {
         // 官方客户端走 user_pswd：U/SMS/SMS_TIME=0/HASH/S_CODE，并复用挑战响应 Cookie
@@ -486,6 +550,16 @@ impl AuthClient {
     }
 }
 
+/// 踢出旧会话的 `user_pswd_r` 表单：U 为 Base64 账号，复用密码请求的 HASH/S_CODE。
+fn kick_login_body(user: &str, hash: &str, s_code: &str) -> String {
+    format!(
+        "U={}&HASH={}&S_CODE={}",
+        form_encode(&encode_user(user)),
+        form_encode(hash),
+        form_encode(s_code)
+    )
+}
+
 /// 动态验证码登录表单：官方客户端固定发送 SMS_TIME=0，并复用密码请求的 HASH/S_CODE。
 fn sms_login_body(user: &str, sms: &str, hash: &str, s_code: &str) -> String {
     format!(
@@ -759,6 +833,12 @@ mod tests {
     fn 动态验证码登录表单与官方客户端一致() {
         let body = sms_login_body("demo", "713375", "H1", "S1");
         assert_eq!(body, "U=demo&SMS=713375&SMS_TIME=0&HASH=H1&S_CODE=S1");
+    }
+
+    #[test]
+    fn 踢出旧会话表单使用_base64_账号() {
+        let body = kick_login_body("demo", "H1", "S1");
+        assert_eq!(body, "U=ZGVtbw%3D%3D&HASH=H1&S_CODE=S1");
     }
 
     #[test]

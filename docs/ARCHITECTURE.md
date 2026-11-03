@@ -214,6 +214,7 @@ TopSAP-Next/
 │       ├── profiles.rs          # 连接配置存储与导入导出
 │       ├── proxy_bypass.rs      # 三平台系统代理绕过列表
 │       ├── secret_store.rs
+│       ├── elevate.rs           # macOS 启动时申请管理员权限并重启
 │       ├── session_guard.rs     # 异常退出会话标记与下次启动补注销
 │       ├── shutdown.rs          # 系统关机/终止信号下的限时断开
 │       ├── auth/{mod,client,error,parser}.rs
@@ -311,6 +312,7 @@ TLS 建连（不校验证书、不发 SNI）
 | `settings` | 应用设置读写与校验 | `AppSettings` |
 | `proxy_bypass` | Windows / macOS / Linux 系统代理绕过列表同步 | `ProxyBypassStatus` |
 | `secret_store` | keyring 优先 + AES-GCM 回退 | `SecretStore` |
+| `elevate` | macOS 非 root 时通过 `osascript` 申请管理员权限并重启自身 | `ensure_admin()` |
 | `session_guard` | 异常退出会话标记、启动/连接前补注销 | `PendingSession`, `purge()` |
 | `shutdown` | Windows `WM_ENDSESSION`、Unix 终止信号下的限时断开 | `quick_disconnect_blocking` |
 
@@ -395,6 +397,28 @@ flowchart TD
 ```
 
 标记只保存网关、端口、`session_id` 与时间，使用机器绑定 AES-256-GCM 加密，Unix 下权限 0600；超过 24 小时不再重试。
+
+### 7.6 已登录踢出
+
+登录返回 `-40077` 时，`AuthClient::kick_user` 按原客户端状态机执行：
+
+1. 重新 `POST /vone/login/auth_param`，刷新 Cookie；
+2. 设置 `sv_un=<账号 Base64>`；
+3. `POST /vone/login/user_pswd_r`，表单为 `U=<账号 Base64>&HASH=<原 HASH>&S_CODE=<原 S_CODE>`；
+4. `Ret` 优先取响应体，缺失时回退 `X-sv-ret`；成功则 `normalize_login` 返回新的 `session_id`。
+
+密码登录与动态验证码登录两条路径都会在 `-40077` 时尝试一次踢出；踢出后若网关要求动态验证码，继续复用现有短信流程。该逻辑不依赖本地会话标记，因此官方客户端异常退出、当前客户端没有标记时同样生效。
+
+### 7.7 macOS 提权
+
+官方 pkg 的 `PackageInfo` 声明 `auth="root"`，`PostInstall` 把 `com.topsec.vpn.TopServ.plist` 安装到 `/Library/LaunchDaemons` 并用 `sudo launchctl load -w` 加载 `LocalTopserv.app`（`LSUIElement`，以 root 运行），GUI 本身仍以用户身份运行。
+
+本项目当前由单一进程完成建卡与路由，因此 macOS 启动时：
+
+- `geteuid() != 0` 且未设置 `TOPSAP_ELEVATED` / `TOPSAP_NO_ELEVATE` 时，通过 `osascript -e 'do shell script ... with administrator privileges'` 重启自身；
+- 重启命令保留用户 `HOME`、`USER`、`LOGNAME` 与 `PATH`，避免配置与日志落到 `/var/root`；
+- 用户取消授权则继续以普通用户启动，自检会提示需要 root；
+- 长期方案可改为官方同款 root LaunchDaemon/特权 helper，GUI 保持用户身份。
 
 ---
 

@@ -395,7 +395,7 @@ impl Engine {
         form: &LoginForm,
         captcha: &str,
         sms_time: u32,
-        challenge: bool,
+        mut challenge: bool,
     ) -> Result<LoginSession, String> {
         {
             let cookie = auth.cookie().map(|value| {
@@ -418,6 +418,7 @@ impl Engine {
         }
 
         let mut attempt = 0u32;
+        let mut kick_attempted = false;
         // 首次弹出无提示；验证码被网关拒绝后重新弹出时带上原因
         let mut notice: Option<String> = None;
         loop {
@@ -469,6 +470,52 @@ impl Engine {
                     self.log("动态验证码错误，请重新输入");
                     notice = Some("验证码错误或已过期，请重新输入".to_string());
                     continue;
+                }
+                Err(AuthError::Rejected { code: -40077, .. }) if !kick_attempted => {
+                    kick_attempted = true;
+                    self.log("账号已在别处登录，正在踢出旧会话并继续登录");
+                    match auth.kick_user().await {
+                        Ok(session) => {
+                            self.lock().pending_sms = None;
+                            return Ok(session);
+                        }
+                        Err(AuthError::NeedSms {
+                            challenge: next_challenge,
+                            sms_time,
+                        }) => {
+                            challenge = next_challenge;
+                            let cookie = auth.cookie().map(str::to_string);
+                            if let Some(pending) = self.lock().pending_sms.as_mut() {
+                                pending.sms_time = sms_time;
+                                if cookie.is_some() {
+                                    pending.cookie = cookie;
+                                }
+                            }
+                            notice = Some("验证码已失效，请重新输入".to_string());
+                            continue;
+                        }
+                        Err(AuthError::PasswordChangeRequired { code, user }) => {
+                            let message = password_change_message(code);
+                            let user = if user.trim().is_empty() {
+                                form.user.clone()
+                            } else {
+                                user
+                            };
+                            self.emit(EngineEvent::PasswordChangeRequired {
+                                code,
+                                user,
+                                host: form.gateway.clone(),
+                                port: form.port_or_default(),
+                                message: message.clone(),
+                            });
+                            self.lock().pending_sms = None;
+                            return Err(message);
+                        }
+                        Err(err) => {
+                            self.lock().pending_sms = None;
+                            return Err(err.user_message());
+                        }
+                    }
                 }
                 Err(err) => {
                     self.lock().pending_sms = None;
@@ -631,6 +678,53 @@ impl Engine {
                     captcha_round += 1;
                     self.log(format!("验证码校验失败（Ret={ret}），已自动刷新验证码"));
                     continue;
+                }
+                Err(AuthError::Rejected { code: -40077, .. }) => {
+                    self.log("账号已在别处登录，正在踢出旧会话并继续登录");
+                    match auth.kick_user().await {
+                        Ok(session) => break session,
+                        Err(AuthError::NeedSms {
+                            challenge,
+                            sms_time,
+                        }) => {
+                            self.log("踢出旧会话后需要重新输入动态验证码");
+                            match self
+                                .complete_sms_login(&mut auth, &form, &code, sms_time, challenge)
+                                .await
+                            {
+                                Ok(session) => break session,
+                                Err(message) => {
+                                    self.log(format!("动态验证码登录失败：{message}"));
+                                    self.set_phase(Phase::Failed, message.clone());
+                                    return Err(message);
+                                }
+                            }
+                        }
+                        Err(AuthError::PasswordChangeRequired { code, user }) => {
+                            let message = password_change_message(code);
+                            let user = if user.trim().is_empty() {
+                                form.user.clone()
+                            } else {
+                                user
+                            };
+                            self.emit(EngineEvent::PasswordChangeRequired {
+                                code,
+                                user,
+                                host: gateway.clone(),
+                                port,
+                                message: message.clone(),
+                            });
+                            self.log(format!("登录失败：{message}"));
+                            self.set_phase(Phase::Failed, message.clone());
+                            return Err(message);
+                        }
+                        Err(err) => {
+                            let message = err.user_message();
+                            self.log(format!("踢出旧会话失败：{message}"));
+                            self.set_phase(Phase::Failed, message.clone());
+                            return Err(message);
+                        }
+                    }
                 }
                 Err(AuthError::NeedSms {
                     challenge,

@@ -51,6 +51,7 @@ Credentials stay on your machine (system credential manager first), and disconne
 - **Live stats and session details** — After connecting, show the resource list, gateway/account/version/tunnel details, a 60-second traffic chart and current/previous login IP and time records; the runtime log stays visible.
 - **Clean disconnect** — Routes, DNS and the adapter session are rolled back in reverse order from a ledger; normal quit, system shutdown and termination signals attempt a bounded disconnect; sessions left by a forced kill or power loss are logged out on the next launch/connect.
 - **Auto reconnect** — Exponential backoff (up to 5 attempts) when the tunnel drops unexpectedly; manual disconnects never trigger it, and it can be disabled in settings.
+- **Automatic kick-out** — When login returns `Ret=-40077`, the app follows the official flow: re-fetch `auth_param`, call `user_pswd_r` to kick the previous session, and continue logging in without re-entering credentials or relying on a local session marker.
 - **Adapter self-test** — Without touching the gateway, verifies admin rights, driver loading, adapter creation, address assignment, read-back, test route and bidirectional packet flow in seconds — separating adapter faults from protocol faults.
 - **Residue detection** — Older versions could leave a hosts block after an abrupt exit; the Diagnostics page can detect and remove it in one click.
 - **Connection profiles** — Save multiple gateway profiles (name, connection mode, probe timeout, address list), with several lines per profile; selecting a profile hides the gateway and port, and multi-line profiles can auto-pick the fastest line or show a latency-sorted picker before connecting. Import, export or clear profiles from the Settings window.
@@ -123,7 +124,7 @@ See [docs/PROTOCOL.md](docs/PROTOCOL.md) for the full protocol and [docs/ARCHITE
 Local development requires **Rust 1.77+** and **Node.js 20+**. Runtime support covers Windows 7 SP1 / 10 / 11 (x64), macOS (Intel / Apple silicon) and Linux (amd64 / arm64).
 
 - **Windows**: uses the Wintun virtual adapter; the installer requests administrator rights on launch.
-- **macOS / Linux**: uses the system TUN device and must run as root or with `sudo` to create the interface and edit routes/DNS.
+- **macOS / Linux**: uses the system TUN device and needs root privileges to create the interface and edit routes/DNS. On macOS the app requests administrator authorization at launch and restarts itself as root; cancelling leaves the self-test and connection reporting that root is required. On Linux run `sudo ./topsap-client`.
 
 ```bash
 git clone https://github.com/zyx3721/topsap-next.git
@@ -180,7 +181,7 @@ The installer requests administrator rights on launch (creating the virtual adap
 
 The portable build runs `topsap-client.exe` directly; keep `resources\wintun.dll` at its relative path, and run it as administrator as well.
 
-> **macOS / Linux users**: the app needs root privileges to create the TUN interface and edit routes. On macOS run `sudo open "/Applications/TopSAP Client.app"`; on Linux run `sudo ./topsap-client`. The macOS app is not signed or notarized by Apple — if macOS reports it as damaged on first launch, run `sudo xattr -rd com.apple.quarantine "/Applications/TopSAP Client.app"` to remove the quarantine attribute.
+> **macOS / Linux users**: the app needs root privileges to create the TUN interface and edit routes. On macOS it requests administrator authorization at launch and restarts as root; you can also run `sudo open "/Applications/TopSAP Client.app"` manually. On Linux run `sudo ./topsap-client`. The macOS app is not signed or notarized by Apple — if macOS reports it as damaged on first launch, run `sudo xattr -rd com.apple.quarantine "/Applications/TopSAP Client.app"` to remove the quarantine attribute.
 
 ### Option 2: Build from source
 
@@ -233,7 +234,7 @@ Check in order: gateway address and port, account/password validity, captcha cor
 
 **It says the account is logged in elsewhere (`Ret=-40077`).**
 
-Another session still holds the account. Make sure neither the official client nor this client has a leftover process. This client records sessions left unresolved by a forced kill, crash or shutdown and retries the logout on the next launch/connect; if the message persists, wait for the gateway session to time out or ask the administrator to release it.
+Another session still holds the account. This client automatically follows the official kick-out flow: re-fetch `auth_param`, call `user_pswd_r` to terminate the old session, and continue logging in. It also works when the old session came from the official client and this client has no local marker. If the kick still fails, make sure neither side has a leftover process, wait for the gateway session to time out, or ask the administrator to release it.
 
 **It says the captcha is wrong (`Ret=-40018`).**
 
@@ -261,7 +262,7 @@ Yes. On startup the app reads the real OS version through `RtlGetVersion`; versi
 
 **How do I run it on macOS / Linux?**
 
-macOS and Linux use the system TUN device and need root privileges to create the interface and edit routes. On macOS run `sudo open "/Applications/TopSAP Client.app"`; on Linux run `sudo ./topsap-client`. Linux needs the WebKitGTK 4.1 runtime (`sudo apt-get install libwebkitgtk-4.1-0` on Ubuntu/Debian). Both platforms use a TUN-based data plane instead of Wintun; the implementation is in place and built by CI, but a full connection regression on real hardware is still pending.
+macOS and Linux use the system TUN device and need root privileges to create the interface and edit routes. On macOS the app requests administrator authorization at launch and restarts as root; you can also run `sudo open "/Applications/TopSAP Client.app"` manually. On Linux run `sudo ./topsap-client`. Linux needs the WebKitGTK 4.1 runtime (`sudo apt-get install libwebkitgtk-4.1-0` on Ubuntu/Debian). Both platforms use a TUN-based data plane instead of Wintun; the implementation is in place and built by CI, but a full connection regression on real hardware is still pending.
 
 **Can it coexist with the official client?**
 
@@ -297,6 +298,7 @@ topsap-next/
 │   │   ├── platform.rs         Runtime detection (Windows 7 compatibility branch)
 │   │   ├── tls.rs              Shared TLS configuration
 │   │   ├── dto.rs / settings.rs / secret_store.rs / proxy_bypass.rs
+│   │   ├── elevate.rs           macOS admin relaunch
 │   │   ├── session_guard.rs     Abnormal-exit session marker and deferred logout
 │   │   ├── shutdown.rs          Bounded disconnect on shutdown/termination
 │   ├── resources/wintun.dll    Bundled virtual adapter driver

@@ -6,6 +6,8 @@
 pub mod auth;
 pub mod commands;
 pub mod dto;
+#[cfg(target_os = "macos")]
+pub mod elevate;
 pub mod netcfg;
 pub mod password_reset;
 pub mod paths;
@@ -37,6 +39,9 @@ pub struct AppState {
 }
 
 pub fn run() {
+    #[cfg(target_os = "macos")]
+    elevate::ensure_admin();
+
     // 全链路统一 rustls provider，必须在任何 TLS 连接建立前完成
     tls::install_default_provider();
 

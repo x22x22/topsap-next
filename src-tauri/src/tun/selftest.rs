@@ -105,7 +105,7 @@ pub async fn run(dll_path: &Path) -> SelfTestReport {
         #[cfg(unix)]
         b.fail(
             "管理员权限",
-            "未提权，无法创建 TUN 接口；请使用 root 或 sudo 运行",
+            "未提权，无法创建 TUN 接口；请重新启动并在系统授权框中允许管理员权限，或以 root/sudo 运行",
         );
         return b.finish();
     }

@@ -224,6 +224,20 @@ Cookie: topafasfasfassession_id=<会话ID>
 
 返回 `{ Ret: 0 }`。不注销会占用账号的单点登录名额，下一次登录报 `-40077`。
 
+### 2.9 已登录踢出（-40077）
+
+原客户端登录返回 `-40077` 时会弹出确认框；确认后原生层执行：
+
+```
+POST /vone/login/auth_param            # 重新获取 auth_param 与 Cookie
+POST /vone/login/user_pswd_r           # 踢出旧会话并重新取回 session_id
+U=<账号 Base64>&HASH=<原密码请求的 HASH>&S_CODE=<原密码请求的 S_CODE>
+```
+
+`user_pswd_r` 的返回结构与 `user_pswd` 相同（`user_param` / `net_param` / `res_list`），成功时 `X-sv-ret: 0`，失败时 `Ret`/`X-sv-ret` 为负值。原客户端在 `kick_user` 之后仍可能返回 `-40039`（要求动态验证码），需要继续走短信/企业微信验证码流程。
+
+当前项目在 `-40077` 时自动执行上述踢出流程并继续登录，不再直接报错；会话标记补注销与自动踢出同时保留，覆盖「上一次会话由官方客户端异常退出、当前客户端没有标记」的场景。
+
 ---
 
 ## 3. 隧道协议

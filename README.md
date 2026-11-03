@@ -51,6 +51,7 @@ TopSAP Client 用 Tauri 2 重写了整条链路：登录、隧道、虚拟网卡
 - **实时统计与连接信息** — 连接后展示资源列表、网关/账号/版本/隧道类型等基本信息、60 秒收发流量曲线，以及本次/上次登录 IP 与时间记录；运行日志保持可见。
 - **断开清理** — 路由、DNS、网卡会话按账本逆序撤销；正常退出、系统关机与终止信号下会限时尝试断开；强杀或断电留下的会话标记会在下次启动/连接前补注销。
 - **断线自动重连** — 隧道异常断开后按指数退避重试（最多 5 次），主动断开不触发；可在设置中关闭。
+- **已登录自动踢出** — 登录返回 `Ret=-40077` 时，按原客户端逻辑重新获取 `auth_param` 并调用 `user_pswd_r` 踢出上一次会话，成功后继续登录；无需重新输入账号密码，也不依赖本地会话标记。
 - **网卡自检** — 不接触网关，几秒内验证管理员权限、驱动加载、建卡、配址、回读、测试路由与双向收发，把「网卡层故障」和「协议层故障」分开定位。
 - **残留检测** — 旧版本异常退出可能留下 hosts 标记段；启动后可在诊断页检测并一键清理。
 - **连接配置管理** — 保存多个网关配置（名称、连接模式、检测超时、地址列表），支持一条配置内多条线路；选中配置后隐藏网关与端口，支持自动选最快线路或连接前手动选路；可导入、导出、清空配置，并在设置窗口切换默认连接。
@@ -123,7 +124,7 @@ TopSAP Client 用 Tauri 2 重写了整条链路：登录、隧道、虚拟网卡
 本地开发需要 **Rust 1.77+** 与 **Node.js 20+**。运行支持 Windows 7 SP1 / 10 / 11（x64）、macOS（Intel / Apple 芯片）与 Linux（amd64 / arm64）。
 
 - **Windows**：使用 Wintun 虚拟网卡，安装包启动时请求管理员权限。
-- **macOS / Linux**：使用系统 TUN 设备，需要 root 或 `sudo` 运行才能创建接口、修改路由与 DNS。
+- **macOS / Linux**：使用系统 TUN 设备，需要 root 权限才能创建接口、修改路由与 DNS。macOS 启动时会自动弹出系统授权框并以管理员身份重启；取消授权则自检与连接会提示需要 root。Linux 使用 `sudo ./topsap-client`。
 
 ```bash
 git clone https://github.com/zyx3721/topsap-next.git
@@ -180,7 +181,7 @@ cargo test --lib                          # Rust 单元测试
 
 便携版解压后直接运行 `topsap-client.exe`，需保持 `resources\wintun.dll` 的相对位置不变，同样需要以管理员身份运行。
 
-> **macOS / Linux 用户**：应用需要 root 权限才能创建 TUN 接口与修改路由。macOS 建议执行 `sudo open "/Applications/TopSAP Client.app"`；Linux 直接 `sudo ./topsap-client`。macOS 应用未做 Apple 签名与公证，首次打开如提示「已损坏」，执行 `sudo xattr -rd com.apple.quarantine "/Applications/TopSAP Client.app"` 移除隔离属性。
+> **macOS / Linux 用户**：应用需要 root 权限才能创建 TUN 接口与修改路由。macOS 启动时会自动请求管理员授权并重启为 root；也可以手动执行 `sudo open "/Applications/TopSAP Client.app"`。Linux 直接 `sudo ./topsap-client`。macOS 应用未做 Apple 签名与公证，首次打开如提示「已损坏」，执行 `sudo xattr -rd com.apple.quarantine "/Applications/TopSAP Client.app"` 移除隔离属性。
 
 ### 方式二：本地源码构建
 
@@ -233,7 +234,7 @@ npm run tauri build
 
 **提示账号已在别处登录（`Ret=-40077`）怎么办？**
 
-说明同一账号还有另一个会话。确认官方客户端与本客户端都没有残留进程。本客户端在强杀、崩溃或关机后会记录未完成注销的会话，下次启动/连接前自动补注销；若仍提示，等待几分钟让网关会话超时，或联系管理员释放。
+说明同一账号还有另一个会话。本客户端会自动执行原客户端的踢出流程：重新获取 `auth_param`，再以 `user_pswd_r` 踢出旧会话并继续登录；即使旧会话来自官方客户端、当前客户端没有会话标记，也会自动处理。若踢出仍失败，确认两边都没有残留进程，等待几分钟让网关会话超时，或联系管理员释放。
 
 **提示验证码错误（`Ret=-40018`）？**
 
@@ -261,7 +262,7 @@ npm run tauri build
 
 **macOS / Linux 怎么运行？**
 
-macOS 与 Linux 使用系统 TUN 设备，需要 root 权限创建接口与修改路由。macOS 执行 `sudo open "/Applications/TopSAP Client.app"`，Linux 执行 `sudo ./topsap-client`。Linux 需要 WebKitGTK 4.1 运行时（Ubuntu/Debian: `sudo apt-get install libwebkit2gtk-4.1-0`）。两者的数据面基于 TUN，不依赖 Wintun 驱动；当前版本已实现并纳入 CI 构建，尚未在真机完成完整连接回归。
+macOS 与 Linux 使用系统 TUN 设备，需要 root 权限创建接口与修改路由。macOS 启动时会自动请求管理员授权并重启为 root，也可手动执行 `sudo open "/Applications/TopSAP Client.app"`；Linux 执行 `sudo ./topsap-client`。Linux 需要 WebKitGTK 4.1 运行时（Ubuntu/Debian: `sudo apt-get install libwebkit2gtk-4.1-0`）。两者的数据面基于 TUN，不依赖 Wintun 驱动；当前版本已实现并纳入 CI 构建，尚未在真机完成完整连接回归。
 
 **能和官方客户端同时装吗？**
 
@@ -297,6 +298,7 @@ topsap-next/
 │   │   ├── platform.rs         运行环境探测（Windows 7 兼容分支）
 │   │   ├── tls.rs              统一 TLS 配置
 │   │   ├── dto.rs / settings.rs / secret_store.rs / proxy_bypass.rs
+│   │   ├── elevate.rs           macOS 启动提权与重启
 │   │   ├── session_guard.rs     异常退出会话标记与下次启动补注销
 │   │   ├── shutdown.rs          系统关机/终止信号下的限时断开
 │   ├── resources/wintun.dll    随包分发的虚拟网卡驱动
