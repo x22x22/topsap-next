@@ -19,6 +19,9 @@ Thumbs.db
 # 安装包产物
 release/
 
+# 本地逆向分析缓存
+temp/
+
 # 文档
 AGENTS.md
 优化.md
