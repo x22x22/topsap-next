@@ -198,12 +198,11 @@ export function SettingsDialog({
   ];
   const activeSection = sections.find((item) => item.id === section) ?? sections[0];
 
-  // 所有开关与选项即时持久化，不再需要底部保存按钮
-  const update = (patch: Partial<AppSettings>) => {
+  const update = (patch: Partial<AppSettings>, onSaved?: () => void) => {
     if (!draft) return;
     const next = { ...draft, ...patch };
     setDraft(next);
-    save.mutate(next);
+    save.mutate(next, onSaved ? { onSuccess: onSaved } : undefined);
   };
 
   const proxyEntries = draft?.proxy_bypass ?? [];
@@ -239,7 +238,14 @@ export function SettingsDialog({
 
   const restoreBypassDefaults = () => {
     if (!draft) return;
-    update({ proxy_bypass: mergeDefaultProxyBypass(proxyEntries) });
+    const merged = mergeDefaultProxyBypass(proxyEntries);
+    if (merged.length === proxyEntries.length) {
+      toast.info(t("代理绕过已包含默认条目"));
+      return;
+    }
+    update({ proxy_bypass: merged }, () =>
+      toast.success(t("已恢复默认代理绕过条目")),
+    );
   };
 
   const changeTheme = (theme: ThemeMode) => {

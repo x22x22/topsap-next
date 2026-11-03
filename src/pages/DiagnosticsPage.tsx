@@ -31,6 +31,21 @@ export function DiagnosticsPage() {
 
   const hasResidue = residueQuery.data?.hosts ?? false;
 
+  const recheckResidue = async () => {
+    const result = await residueQuery.refetch();
+    if (result.error) {
+      toast.error(`${t("检查失败")}：${firstLine(String(result.error))}`, {
+        duration: 5000,
+      });
+      return;
+    }
+    if (result.data?.hosts) {
+      toast.warning(t("检测到 hosts 残留，可点击清理"));
+    } else {
+      toast.success(t("检查完成，未发现 hosts 残留"));
+    }
+  };
+
   return (
     <div className="mx-auto flex w-full max-w-4xl flex-col gap-4">
       <SelfTestPanel />
@@ -43,7 +58,7 @@ export function DiagnosticsPage() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => void residueQuery.refetch()}
+              onClick={() => void recheckResidue()}
               disabled={residueQuery.isFetching}
             >
               {residueQuery.isFetching ? (

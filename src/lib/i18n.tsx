@@ -247,6 +247,9 @@ const EN: Record<string, string> = {
   "关闭后只移除本应用写入的条目，不修改其他代理设置":
     "When disabled, only entries written by this app are removed; other proxy settings stay untouched",
   "恢复默认": "Restore defaults",
+  "代理绕过已包含默认条目":
+    "The default proxy bypass entries are already present",
+  "已恢复默认代理绕过条目": "Default proxy bypass entries restored",
   "暂无代理绕过条目": "No proxy bypass entries",
   "默认会加入 *.sunline.cn 与 *.sunline-i.com":
     "By default *.sunline.cn and *.sunline-i.com are included",
@@ -350,6 +353,11 @@ const EN: Record<string, string> = {
   "已清理 hosts 残留": "Hosts residue cleaned",
   "没有需要清理的残留": "No residue to clean",
   "清理失败": "Cleanup failed",
+  "检查失败": "Check failed",
+  "检测到 hosts 残留，可点击清理":
+    "Hosts residue detected; you can clean it now",
+  "检查完成，未发现 hosts 残留":
+    "Check complete; no hosts residue found",
   "强杀进程不会触发清理流程，可能残留路由；旧版本遗留的 hosts 标记段也可在此清理。":
     "Force-killing the process skips cleanup and may leave routes behind; any legacy hosts block can also be cleaned here.",
   // 自检
