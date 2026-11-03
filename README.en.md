@@ -321,11 +321,11 @@ topsap-next/
 
 ## Release Notes
 
-| Version | Date | Changelog |
+| Version | Release date | Changelog |
 | --- | --- | --- |
-| v0.1.0 | In development | [docs/CHANGELOG.md](docs/CHANGELOG.md) |
+| v1.0.0 | 2026-11-03 | [verchanglog/v1.0.0.md](verchanglog/v1.0.0.md) |
 
-After the first release, each version's changelog lives in `verchanglog/vX.X.X.md`; build artifacts and release notes are on the [GitHub Releases](https://github.com/zyx3721/topsap-next/releases) page.
+Build artifacts and release notes for every version are on the [GitHub Releases](https://github.com/zyx3721/topsap-next/releases) page.
 
 ## Acknowledgements
 
