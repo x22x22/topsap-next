@@ -21,6 +21,17 @@ impl CmdOutput {
 
 /// 执行命令，不经过 shell，避免注入；窗口隐藏。
 pub async fn run(program: &str, args: &[&str]) -> CmdOutput {
+    #[cfg(target_os = "macos")]
+    {
+        let program = program.to_string();
+        let args: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
+        if let Ok(Some(output)) =
+            tokio::task::spawn_blocking(move || crate::privileged::run(&program, &args)).await
+        {
+            return output;
+        }
+    }
+
     let mut std_cmd = std::process::Command::new(program);
     std_cmd
         .args(args)

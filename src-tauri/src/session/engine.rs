@@ -849,15 +849,20 @@ impl Engine {
     ) -> Result<(), String> {
         self.set_phase(Phase::CreatingTun, "正在创建虚拟网卡");
         let dll = self.dll_path.clone();
-        let device = tokio::task::spawn_blocking(move || TunDevice::open(&dll, ADAPTER_NAME))
-            .await
-            .map_err(|e| format!("网卡任务异常：{e}"))?
-            .map_err(|e| e.to_string())?;
+        let vip = session.vip.clone();
+        let mask = session.vip_mask.clone();
+        let device = tokio::task::spawn_blocking(move || {
+            TunDevice::open_for(&dll, ADAPTER_NAME, &vip, &mask)
+        })
+        .await
+        .map_err(|e| format!("网卡任务异常：{e}"))?
+        .map_err(|e| e.to_string())?;
+        let interface_name = device.interface_name().to_string();
         let tun = Arc::new(device);
-        self.log(format!("虚拟网卡已就绪：{ADAPTER_NAME}"));
+        self.log(format!("虚拟网卡已就绪：{interface_name}"));
 
         self.set_phase(Phase::Configuring, "正在配置网卡地址");
-        let mut net = NetConfig::new(ADAPTER_NAME);
+        let mut net = NetConfig::new(interface_name);
         if let Err(err) = net
             .configure_interface(&session.vip, &session.vip_mask)
             .await

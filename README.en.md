@@ -124,7 +124,7 @@ See [docs/PROTOCOL.md](docs/PROTOCOL.md) for the full protocol and [docs/ARCHITE
 Local development requires **Rust 1.77+** and **Node.js 20+**. Runtime support covers Windows 7 SP1 / 10 / 11 (x64), macOS (Intel / Apple silicon) and Linux (amd64 / arm64).
 
 - **Windows**: uses the Wintun virtual adapter; the installer requests administrator rights on launch.
-- **macOS / Linux**: uses the system TUN device and needs root privileges to create the interface and edit routes/DNS. On macOS the app requests administrator authorization at launch and restarts itself as root; cancelling leaves the self-test and connection reporting that root is required. On Linux run `sudo ./topsap-client`.
+- **macOS / Linux**: uses the system TUN device and needs root privileges to create the interface and edit routes/DNS. On macOS the first launch installs a root LaunchDaemon helper after administrator authorization; the GUI stays user-level and uses the helper for the self-test and adapter creation. Cancelling leaves the self-test and connection reporting that the helper is unavailable. On Linux run `sudo ./topsap-client`.
 
 ```bash
 git clone https://github.com/zyx3721/topsap-next.git
@@ -181,7 +181,7 @@ The installer requests administrator rights on launch (creating the virtual adap
 
 The portable build runs `topsap-client.exe` directly; keep `resources\wintun.dll` at its relative path, and run it as administrator as well.
 
-> **macOS / Linux users**: the app needs root privileges to create the TUN interface and edit routes. On macOS it requests administrator authorization at launch and restarts as root; you can also run `sudo open "/Applications/TopSAP Client.app"` manually. On Linux run `sudo ./topsap-client`. The macOS app is not signed or notarized by Apple — if macOS reports it as damaged on first launch, run `sudo xattr -rd com.apple.quarantine "/Applications/TopSAP Client.app"` to remove the quarantine attribute.
+> **macOS / Linux users**: the app needs root privileges to create the TUN interface and edit routes. On macOS the first launch requests administrator authorization and installs a root LaunchDaemon helper (`com.topsap.next.helper`); afterwards the GUI runs as the current user. You can also run `sudo open "/Applications/TopSAP Client.app"` as a local fallback. On Linux run `sudo ./topsap-client`. The macOS app is not signed or notarized by Apple — if macOS reports it as damaged on first launch, run `sudo xattr -rd com.apple.quarantine "/Applications/TopSAP Client.app"` to remove the quarantine attribute.
 
 ### Option 2: Build from source
 
@@ -262,7 +262,7 @@ Yes. On startup the app reads the real OS version through `RtlGetVersion`; versi
 
 **How do I run it on macOS / Linux?**
 
-macOS and Linux use the system TUN device and need root privileges to create the interface and edit routes. On macOS the app requests administrator authorization at launch and restarts as root; you can also run `sudo open "/Applications/TopSAP Client.app"` manually. On Linux run `sudo ./topsap-client`. Linux needs the WebKitGTK 4.1 runtime (`sudo apt-get install libwebkitgtk-4.1-0` on Ubuntu/Debian). Both platforms use a TUN-based data plane instead of Wintun; the implementation is in place and built by CI, but a full connection regression on real hardware is still pending.
+macOS and Linux use the system TUN device and need root privileges to create the interface and edit routes. On macOS the first launch requests administrator authorization and installs a root LaunchDaemon helper; the GUI stays user-level. You can also run `sudo open "/Applications/TopSAP Client.app"` as a local fallback. On Linux run `sudo ./topsap-client`. Linux needs the WebKitGTK 4.1 runtime (`sudo apt-get install libwebkitgtk-4.1-0` on Ubuntu/Debian). Both platforms use a TUN-based data plane instead of Wintun; the implementation is in place and built by CI, but a full connection regression on real hardware is still pending.
 
 **Can it coexist with the official client?**
 
@@ -298,7 +298,8 @@ topsap-next/
 │   │   ├── platform.rs         Runtime detection (Windows 7 compatibility branch)
 │   │   ├── tls.rs              Shared TLS configuration
 │   │   ├── dto.rs / settings.rs / secret_store.rs / proxy_bypass.rs
-│   │   ├── elevate.rs           macOS admin relaunch
+│   │   ├── helper.rs            macOS root helper (TUN creation + allowlisted commands)
+│   │   ├── privileged.rs        macOS helper client and LaunchDaemon installer
 │   │   ├── session_guard.rs     Abnormal-exit session marker and deferred logout
 │   │   ├── shutdown.rs          Bounded disconnect on shutdown/termination
 │   ├── resources/wintun.dll    Bundled virtual adapter driver

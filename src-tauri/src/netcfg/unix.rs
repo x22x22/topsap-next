@@ -71,7 +71,7 @@ impl NetConfig {
         let actual = self.interface_ipv4().await;
         if !actual.iter().any(|addr| addr == vip) {
             return Err(NetError::Interface(format!(
-                "配置网卡地址失败（当前：{}）；请确认以 root 或 sudo 运行",
+                "配置网卡地址失败（当前：{}）；请确认特权 helper 已安装，或以 root/sudo 运行",
                 if actual.is_empty() {
                     "无地址".to_string()
                 } else {
@@ -259,6 +259,12 @@ fn first_ipv4(text: &str) -> Option<String> {
 }
 
 pub async fn is_elevated() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        if crate::privileged::available() {
+            return true;
+        }
+    }
     unsafe { libc::geteuid() == 0 }
 }
 

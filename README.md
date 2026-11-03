@@ -124,7 +124,7 @@ TopSAP Client 用 Tauri 2 重写了整条链路：登录、隧道、虚拟网卡
 本地开发需要 **Rust 1.77+** 与 **Node.js 20+**。运行支持 Windows 7 SP1 / 10 / 11（x64）、macOS（Intel / Apple 芯片）与 Linux（amd64 / arm64）。
 
 - **Windows**：使用 Wintun 虚拟网卡，安装包启动时请求管理员权限。
-- **macOS / Linux**：使用系统 TUN 设备，需要 root 权限才能创建接口、修改路由与 DNS。macOS 启动时会自动弹出系统授权框并以管理员身份重启；取消授权则自检与连接会提示需要 root。Linux 使用 `sudo ./topsap-client`。
+- **macOS / Linux**：使用系统 TUN 设备，需要 root 权限才能创建接口、修改路由与 DNS。macOS 首次启动会弹出系统授权框安装 root LaunchDaemon helper；GUI 保持当前用户身份，自检与建卡通过 helper 完成。取消授权则自检与连接会提示 helper 不可用。Linux 使用 `sudo ./topsap-client`。
 
 ```bash
 git clone https://github.com/zyx3721/topsap-next.git
@@ -181,7 +181,7 @@ cargo test --lib                          # Rust 单元测试
 
 便携版解压后直接运行 `topsap-client.exe`，需保持 `resources\wintun.dll` 的相对位置不变，同样需要以管理员身份运行。
 
-> **macOS / Linux 用户**：应用需要 root 权限才能创建 TUN 接口与修改路由。macOS 启动时会自动请求管理员授权并重启为 root；也可以手动执行 `sudo open "/Applications/TopSAP Client.app"`。Linux 直接 `sudo ./topsap-client`。macOS 应用未做 Apple 签名与公证，首次打开如提示「已损坏」，执行 `sudo xattr -rd com.apple.quarantine "/Applications/TopSAP Client.app"` 移除隔离属性。
+> **macOS / Linux 用户**：应用需要 root 权限才能创建 TUN 接口与修改路由。macOS 首次启动会请求管理员授权并安装 root LaunchDaemon helper（`com.topsap.next.helper`），之后 GUI 以普通用户运行；也可以手动执行 `sudo open "/Applications/TopSAP Client.app"` 作为本地回退。Linux 直接 `sudo ./topsap-client`。macOS 应用未做 Apple 签名与公证，首次打开如提示「已损坏」，执行 `sudo xattr -rd com.apple.quarantine "/Applications/TopSAP Client.app"` 移除隔离属性。
 
 ### 方式二：本地源码构建
 
@@ -262,7 +262,7 @@ npm run tauri build
 
 **macOS / Linux 怎么运行？**
 
-macOS 与 Linux 使用系统 TUN 设备，需要 root 权限创建接口与修改路由。macOS 启动时会自动请求管理员授权并重启为 root，也可手动执行 `sudo open "/Applications/TopSAP Client.app"`；Linux 执行 `sudo ./topsap-client`。Linux 需要 WebKitGTK 4.1 运行时（Ubuntu/Debian: `sudo apt-get install libwebkit2gtk-4.1-0`）。两者的数据面基于 TUN，不依赖 Wintun 驱动；当前版本已实现并纳入 CI 构建，尚未在真机完成完整连接回归。
+macOS 与 Linux 使用系统 TUN 设备，需要 root 权限创建接口与修改路由。macOS 首次启动会请求管理员授权并安装 root LaunchDaemon helper，GUI 保持用户身份；也可手动执行 `sudo open "/Applications/TopSAP Client.app"` 作为本地回退。Linux 执行 `sudo ./topsap-client`。Linux 需要 WebKitGTK 4.1 运行时（Ubuntu/Debian: `sudo apt-get install libwebkit2gtk-4.1-0`）。两者的数据面基于 TUN，不依赖 Wintun 驱动；当前版本已实现并纳入 CI 构建，尚未在真机完成完整连接回归。
 
 **能和官方客户端同时装吗？**
 
@@ -298,7 +298,8 @@ topsap-next/
 │   │   ├── platform.rs         运行环境探测（Windows 7 兼容分支）
 │   │   ├── tls.rs              统一 TLS 配置
 │   │   ├── dto.rs / settings.rs / secret_store.rs / proxy_bypass.rs
-│   │   ├── elevate.rs           macOS 启动提权与重启
+│   │   ├── helper.rs            macOS root helper（TUN 创建与白名单命令）
+│   │   ├── privileged.rs        macOS helper 客户端与 LaunchDaemon 安装
 │   │   ├── session_guard.rs     异常退出会话标记与下次启动补注销
 │   │   ├── shutdown.rs          系统关机/终止信号下的限时断开
 │   ├── resources/wintun.dll    随包分发的虚拟网卡驱动

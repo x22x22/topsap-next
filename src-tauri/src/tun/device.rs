@@ -113,6 +113,19 @@ impl TunDevice {
         true
     }
 
+    pub fn open_for(
+        dll_path: &Path,
+        adapter_name: &str,
+        _vip: &str,
+        _mask: &str,
+    ) -> Result<Self, TunError> {
+        Self::open(dll_path, adapter_name)
+    }
+
+    pub fn interface_name(&self) -> &str {
+        crate::tun::ADAPTER_NAME
+    }
+
     pub fn packets_in(&self) -> u64 {
         self.packets_in.load(Ordering::Relaxed)
     }

@@ -8,7 +8,7 @@
 - 关机前限时断开：Windows `WM_ENDSESSION`、Linux/macOS `SIGTERM`/`SIGINT` 与 macOS `RunEvent::Exit` 最多等待 2 秒完成断开与注销，超时后交由系统回收 TUN 网卡与路由
 - 连接建立失败后主动注销已登录会话，避免残留会话占用单点名额
 - 已登录自动踢出：登录返回 `-40077` 时重新获取 `auth_param`，通过 `user_pswd_r`（`U/HASH/S_CODE`）踢出旧会话并继续登录；不依赖本地会话标记，覆盖官方客户端异常退出场景
-- macOS 启动提权：非 root 启动时通过系统授权框以管理员身份重启自身，保留用户 `HOME`/`USER`/`LOGNAME`，使自检与 TUN 建卡可用
+- macOS 特权 helper：首次启动通过系统授权框安装 root LaunchDaemon（`com.topsap.next.helper`），GUI 保持用户身份；helper 创建 utun 并通过 `SCM_RIGHTS` 传回 fd，只执行 `ifconfig`/`route` 白名单命令，自检与建卡均通过 helper 完成
 
 ### 变更
 

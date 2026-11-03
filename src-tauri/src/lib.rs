@@ -7,11 +7,13 @@ pub mod auth;
 pub mod commands;
 pub mod dto;
 #[cfg(target_os = "macos")]
-pub mod elevate;
+pub mod helper;
 pub mod netcfg;
 pub mod password_reset;
 pub mod paths;
 pub mod platform;
+#[cfg(target_os = "macos")]
+pub mod privileged;
 pub mod profiles;
 pub mod protocol;
 pub mod proxy_bypass;
@@ -40,7 +42,9 @@ pub struct AppState {
 
 pub fn run() {
     #[cfg(target_os = "macos")]
-    elevate::ensure_admin();
+    if let Err(err) = privileged::ensure_helper() {
+        eprintln!("特权 helper 不可用：{err}");
+    }
 
     // 全链路统一 rustls provider，必须在任何 TLS 连接建立前完成
     tls::install_default_provider();

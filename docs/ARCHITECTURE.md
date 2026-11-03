@@ -214,7 +214,8 @@ TopSAP-Next/
 │       ├── profiles.rs          # 连接配置存储与导入导出
 │       ├── proxy_bypass.rs      # 三平台系统代理绕过列表
 │       ├── secret_store.rs
-│       ├── elevate.rs           # macOS 启动时申请管理员权限并重启
+│       ├── helper.rs            # macOS root helper：TUN 创建与白名单命令
+│       ├── privileged.rs        # macOS helper 客户端与 LaunchDaemon 安装
 │       ├── session_guard.rs     # 异常退出会话标记与下次启动补注销
 │       ├── shutdown.rs          # 系统关机/终止信号下的限时断开
 │       ├── auth/{mod,client,error,parser}.rs
@@ -312,7 +313,8 @@ TLS 建连（不校验证书、不发 SNI）
 | `settings` | 应用设置读写与校验 | `AppSettings` |
 | `proxy_bypass` | Windows / macOS / Linux 系统代理绕过列表同步 | `ProxyBypassStatus` |
 | `secret_store` | keyring 优先 + AES-GCM 回退 | `SecretStore` |
-| `elevate` | macOS 非 root 时通过 `osascript` 申请管理员权限并重启自身 | `ensure_admin()` |
+| `helper` | macOS root LaunchDaemon：创建 utun、执行 ifconfig/route 白名单命令 | `helper::run()` |
+| `privileged` | macOS helper 客户端、LaunchDaemon 安装与版本探活 | `ensure_helper()`, `create_tun()`, `run()` |
 | `session_guard` | 异常退出会话标记、启动/连接前补注销 | `PendingSession`, `purge()` |
 | `shutdown` | Windows `WM_ENDSESSION`、Unix 终止信号下的限时断开 | `quick_disconnect_blocking` |
 
@@ -409,16 +411,24 @@ flowchart TD
 
 密码登录与动态验证码登录两条路径都会在 `-40077` 时尝试一次踢出；踢出后若网关要求动态验证码，继续复用现有短信流程。该逻辑不依赖本地会话标记，因此官方客户端异常退出、当前客户端没有标记时同样生效。
 
-### 7.7 macOS 提权
+### 7.7 macOS 特权 helper
 
 官方 pkg 的 `PackageInfo` 声明 `auth="root"`，`PostInstall` 把 `com.topsec.vpn.TopServ.plist` 安装到 `/Library/LaunchDaemons` 并用 `sudo launchctl load -w` 加载 `LocalTopserv.app`（`LSUIElement`，以 root 运行），GUI 本身仍以用户身份运行。
 
-本项目当前由单一进程完成建卡与路由，因此 macOS 启动时：
+本项目采用同样的「用户态 GUI + root helper」结构：
 
-- `geteuid() != 0` 且未设置 `TOPSAP_ELEVATED` / `TOPSAP_NO_ELEVATE` 时，通过 `osascript -e 'do shell script ... with administrator privileges'` 重启自身；
-- 重启命令保留用户 `HOME`、`USER`、`LOGNAME` 与 `PATH`，避免配置与日志落到 `/var/root`；
-- 用户取消授权则继续以普通用户启动，自检会提示需要 root；
-- 长期方案可改为官方同款 root LaunchDaemon/特权 helper，GUI 保持用户身份。
+- 首次启动时 `privileged::ensure_helper()` 通过系统授权框把当前可执行文件复制到
+  `/Library/Application Support/TopSAP-Next/topsap-helper`，安装
+  `/Library/LaunchDaemons/com.topsap.next.helper.plist` 并启动；
+- helper 以 `--helper --uid <uid>` 运行，只接受该 uid 的本地 Unix socket 连接；
+- helper 只提供两类能力：创建 utun 并通过 `SCM_RIGHTS` 传回 fd；执行
+  `/sbin/ifconfig` 与 `/sbin/route` 白名单命令；
+- `tun/unix.rs` 在 macOS 优先使用 helper 创建 utun，`netcfg/shell.rs` 把
+  ifconfig/route 请求转发给 helper；`is_elevated()` 以 helper 可用为准；
+- helper 不可用且进程不是 root 时，自检与连接明确提示 helper 未运行；
+- 本地 root 运行（`sudo open`）仍保留为调试回退。
+
+helper 安装使用 root LaunchDaemon 而非 `SMJobBless`，因此不要求 Apple 开发者签名；代价是首次安装需要一次管理员授权，且多用户机器上 helper 按首次安装的 uid 服务。
 
 ---
 

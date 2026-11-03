@@ -128,9 +128,9 @@ pub async fn run(dll_path: &Path) -> SelfTestReport {
         b.ok("TUN 设备", "使用系统 TUN，无需额外驱动");
     }
 
-    let device = match TunDevice::open(dll_path, ADAPTER_NAME) {
+    let device = match TunDevice::open_for(dll_path, ADAPTER_NAME, TEST_VIP, TEST_MASK) {
         Ok(d) => {
-            b.ok("创建虚拟网卡与会话", format!("网卡 {ADAPTER_NAME}"));
+            b.ok("创建虚拟网卡与会话", format!("网卡 {}", d.interface_name()));
             Arc::new(d)
         }
         Err(err) => {
@@ -139,7 +139,7 @@ pub async fn run(dll_path: &Path) -> SelfTestReport {
         }
     };
 
-    let mut net = NetConfig::new(ADAPTER_NAME);
+    let mut net = NetConfig::new(device.interface_name().to_string());
 
     match net.configure_interface(TEST_VIP, TEST_MASK).await {
         Ok(_) => {
