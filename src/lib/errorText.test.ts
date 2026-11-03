@@ -37,6 +37,13 @@ describe("localizeError", () => {
     );
   });
 
+  it("翻译会话与连接状态错误", () => {
+    expect(localizeError("已有连接操作正在进行，请稍候")).toBe(
+      "A connection operation is already in progress. Please wait.",
+    );
+    expect(localizeError("所有线路均不可用")).toBe("No line is available.");
+  });
+
   it("未匹配的文案保持原样", () => {
     expect(localizeError("未知的新错误")).toBe("未知的新错误");
   });

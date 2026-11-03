@@ -142,7 +142,7 @@ export function Select<T extends string>({
   onChange,
   disabled,
   ariaLabel,
-  placeholder = "请选择",
+  placeholder,
   className,
 }: {
   value: T;
@@ -153,7 +153,9 @@ export function Select<T extends string>({
   placeholder?: string;
   className?: string;
 }) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
+  const resolvedPlaceholder = placeholder ?? t("请选择");
   const rootRef = useRef<HTMLDivElement>(null);
   const selected = options.find((option) => option.value === value);
 
@@ -190,7 +192,7 @@ export function Select<T extends string>({
         )}
       >
         <span className={cn("truncate", selected ? "text-text" : "text-faint")}>
-          {selected?.label ?? placeholder}
+          {selected?.label ?? resolvedPlaceholder}
         </span>
         <ChevronDown
           className={cn(
@@ -389,6 +391,7 @@ export function EmptyState({
 }
 
 export function ErrorNote({ message, onRetry }: { message: string; onRetry?: () => void }) {
+  const { t } = useI18n();
   return (
     <div className="flex items-start gap-2 rounded-xl border border-danger/30 bg-danger-soft px-3 py-2.5">
       <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-danger" />
@@ -400,7 +403,7 @@ export function ErrorNote({ message, onRetry }: { message: string; onRetry?: () 
             onClick={onRetry}
             className="mt-1 font-medium underline underline-offset-2 hover:opacity-80"
           >
-            重试
+            {t("重试")}
           </button>
         ) : null}
       </div>

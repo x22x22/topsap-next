@@ -5,10 +5,9 @@ import { toast } from "sonner";
 import { api } from "../lib/api";
 import { firstLine } from "../lib/format";
 import { useI18n } from "../lib/i18n";
+import { localizeSelfTestDetail } from "../lib/selfTestText";
 import type { SelfTestReport, SelfTestStatus } from "../types/engine";
 import { Badge, Button, Card, CardHeader, EmptyState, Spinner, cn } from "./ui";
-
-
 
 export function SelfTestPanel() {
   const { t } = useI18n();
@@ -88,11 +87,11 @@ export function SelfTestPanel() {
                     <Icon className={cn("mt-0.5 h-4 w-4 shrink-0", meta.tone)} />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <span className="text-xs font-medium text-text">{step.name}</span>
+                        <span className="text-xs font-medium text-text">{t(step.name)}</span>
                         <span className={cn("text-[10px]", meta.tone)}>{meta.label}</span>
                       </div>
                       <p className="mt-0.5 break-words text-[11px] leading-relaxed text-muted">
-                        {step.detail}
+                        {localizeSelfTestDetail(step.detail)}
                       </p>
                     </div>
                   </li>

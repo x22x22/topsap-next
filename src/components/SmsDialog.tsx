@@ -33,8 +33,8 @@ export function SmsDialog({
   }, [open]);
 
   useEffect(() => {
-    if (open && message) toast.error(message);
-  }, [open, message]);
+    if (open && message) toast.error(t(message));
+  }, [open, message, t]);
 
   useEffect(() => {
     if (countdown <= 0) return;

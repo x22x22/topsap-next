@@ -503,7 +503,7 @@ export function SettingsDialog({
                           onKeyDown={(event) => {
                             if (event.key === "Enter") addBypassEntry();
                           }}
-                          placeholder="*.example.com 或 192.0.2.10"
+                          placeholder={t("*.example.com 或 192.0.2.10")}
                           disabled={!draft.proxy_bypass_enabled || !bypassSupported}
                           className="min-w-56 flex-1"
                         />

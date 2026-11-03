@@ -43,6 +43,7 @@ const EN: Record<string, string> = {
   "取消": "Cancel",
   "确定": "OK",
   "确认": "Confirm",
+  "请选择": "Select",
   "显示密码": "Show password",
   "隐藏密码": "Hide password",
   "保存": "Save",
@@ -156,6 +157,8 @@ const EN: Record<string, string> = {
   "重新发送验证码": "Resend code",
   "重新发送（{seconds} 秒）": "Resend ({seconds}s)",
   "验证码错误或已过期，请重新输入": "The code is wrong or expired. Try again.",
+  "验证码已失效，请重新输入": "The code is no longer valid. Try again.",
+  "请输入动态口令": "Enter the one-time passcode",
   "验证码未被接受，请重新输入": "The code was not accepted. Try again.",
   "重新发送失败": "Resend failed",
   "验证码已重新发送，有效期 {seconds} 秒": "Code resent; valid for {seconds}s",
@@ -234,8 +237,8 @@ const EN: Record<string, string> = {
   "保存多个网关配置，支持多线路优选与备份":
     "Save multiple gateway profiles with preferred or backup lines",
   "暂无连接配置": "No connection profiles",
-  "点击右上角「新增」保存第一个网关配置":
-    "Click Add in the top right to save your first gateway profile",
+  "点击「新增」保存第一个网关配置":
+    "Click Add to save your first gateway profile",
   "默认": "Default",
   "默认连接": "Default profile",
   "添加": "Add",
@@ -250,6 +253,7 @@ const EN: Record<string, string> = {
   "代理绕过已包含默认条目":
     "The default proxy bypass entries are already present",
   "已恢复默认代理绕过条目": "Default proxy bypass entries restored",
+  "*.example.com 或 192.0.2.10": "*.example.com or 192.0.2.10",
   "暂无代理绕过条目": "No proxy bypass entries",
   "默认会加入 *.sunline.cn 与 *.sunline-i.com":
     "By default *.sunline.cn and *.sunline-i.com are included",
@@ -298,6 +302,16 @@ const EN: Record<string, string> = {
   "自检中…": "Running…",
   "通过": "Passed",
   "失败": "Failed",
+  "定位 wintun.dll": "Locate wintun.dll",
+  "TUN 设备": "TUN device",
+  "创建虚拟网卡与会话": "Create virtual adapter and session",
+  "配置网卡地址": "Configure adapter address",
+  "回读网卡地址": "Read back adapter address",
+  "注入测试路由": "Inject test route",
+  "启动读循环": "Start read loop",
+  "发送方向（应用 → 网卡）": "Send path (app → adapter)",
+  "接收方向（网卡 → 应用）": "Receive path (adapter → app)",
+  "系统路由（跨网段投递）": "System route (cross-subnet delivery)",
   "残留检测": "Residue check",
   "检查 hosts 中是否遗留本程序的标记段":
     "Check for leftover hosts entries created by this app",
@@ -321,10 +335,12 @@ const EN: Record<string, string> = {
   "更改即时生效": "Changes apply immediately",
   "安全提示": "Security notice",
   "正在校验账号": "Verifying account",
+  "正在检查上次会话": "Checking the previous session",
   "正在获取验证码": "Fetching captcha",
   "等待输入验证码": "Waiting for captcha input",
   "正在注入路由": "Injecting routes",
   "正在创建虚拟网卡": "Creating virtual adapter",
+  "正在配置网卡地址": "Configuring adapter address",
   "{count} 条": "{count} routes",
   "网关证书普遍自签或已过期，本客户端按协议要求跳过证书链校验且不发送 SNI。":
     "Gateway certificates are often self-signed or expired; per protocol requirements this client skips chain validation and sends no SNI.",
