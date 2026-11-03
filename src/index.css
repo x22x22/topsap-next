@@ -1,0 +1,245 @@
+@import "tailwindcss";
+
+/* 深色为默认主题，浅色通过 html.light 覆盖 */
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --bg: #0b0f14;
+  --bg-elevated: #0f151d;
+  --surface: #121a24;
+  --surface-2: #172130;
+  --surface-3: #1d2a3b;
+  --hover: #213248;
+  --border: #22304255;
+  --border-strong: #2c3f57;
+  --text: #e7eef7;
+  --text-muted: #8ea3ba;
+  --text-faint: #63788f;
+  --accent: #22d3ee;
+  --accent-2: #0ea5e9;
+  --accent-soft: #22d3ee1f;
+  --ok: #34d399;
+  --ok-soft: #34d3991f;
+  --warn: #fbbf24;
+  --warn-soft: #fbbf241f;
+  --danger: #f87171;
+  --danger-soft: #f871711f;
+  --primary-from: #0ea5e9;
+  --primary-to: #22d3ee;
+  --primary-text: #061a26;
+  --shadow: 0 18px 40px -24px rgb(0 0 0 / 0.8);
+}
+
+html.light {
+  --bg: #f4f7fb;
+  --bg-elevated: #eef3f9;
+  --surface: #ffffff;
+  --surface-2: #f7fafd;
+  --surface-3: #eef4fb;
+  --hover: #e2ecf7;
+  --border: #d8e3ef;
+  --border-strong: #c3d3e4;
+  --text: #12202f;
+  --text-muted: #5b7089;
+  --text-faint: #8a9cb1;
+  --accent: #0891b2;
+  --accent-2: #0ea5e9;
+  --accent-soft: #0891b214;
+  --ok: #059669;
+  --ok-soft: #05966914;
+  --warn: #b45309;
+  --warn-soft: #b4530914;
+  --danger: #dc2626;
+  --danger-soft: #dc262614;
+  --primary-from: #22d3ee;
+  --primary-to: #38bdf8;
+  --primary-text: #062634;
+  --shadow: 0 18px 40px -28px rgb(15 40 70 / 0.35);
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-bg-elevated: var(--bg-elevated);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-hover: var(--hover);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-text: var(--text);
+  --color-muted: var(--text-muted);
+  --color-faint: var(--text-faint);
+  --color-accent: var(--accent);
+  --color-accent-2: var(--accent-2);
+  --color-accent-soft: var(--accent-soft);
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-primary-from: var(--primary-from);
+  --color-primary-to: var(--primary-to);
+  --color-primary-text: var(--primary-text);
+
+  --font-sans: "Inter", "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Cascadia Mono", "Consolas", "SFMono-Regular", ui-monospace, monospace;
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background:
+      radial-gradient(1100px 600px at 12% -10%, var(--accent-soft), transparent 60%),
+      radial-gradient(900px 500px at 100% 0%, #0ea5e914, transparent 55%),
+      var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+
+  ::selection {
+    background: var(--accent-soft);
+  }
+
+  /* 统一使用右侧固定眼睛按钮，隐藏 WebView2 自带的条件显示眼睛 */
+  input::-ms-reveal,
+  input::-ms-clear {
+    display: none;
+  }
+
+  /* Tailwind 4 不再默认给按钮手型光标，这里统一所有可交互元素的指针反馈 */
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  a[href],
+  summary,
+  label[for],
+  select:not(:disabled),
+  input[type="checkbox"]:not(:disabled),
+  input[type="radio"]:not(:disabled) {
+    cursor: pointer;
+  }
+
+  button:disabled,
+  [role="button"][aria-disabled="true"],
+  select:disabled,
+  input[type="checkbox"]:disabled,
+  input[type="radio"]:disabled {
+    cursor: not-allowed;
+  }
+
+  /* 细滚动条，避免打断深色布局 */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border-strong);
+    border-radius: 999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--text-faint);
+  }
+}
+
+@layer utilities {
+  .glass {
+    background: color-mix(in srgb, var(--surface) 88%, transparent);
+    backdrop-filter: blur(14px);
+  }
+
+  .grain {
+    background-image: radial-gradient(circle at 1px 1px, var(--border) 1px, transparent 0);
+    background-size: 22px 22px;
+  }
+
+  @keyframes pulse-ring {
+    0% {
+      box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent);
+    }
+    70% {
+      box-shadow: 0 0 0 12px transparent;
+    }
+    100% {
+      box-shadow: 0 0 0 0 transparent;
+    }
+  }
+
+  .pulse-ring {
+    animation: pulse-ring 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+
+  @keyframes fade-up {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .fade-up {
+    animation: fade-up 0.22s ease-out both;
+  }
+}
+
+/* 主题切换：浅色 -> 深色从右向左展开，深色 -> 浅色从左向右展开 */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 460ms;
+  animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+html[data-theme-dir="to-dark"]::view-transition-old(root),
+html[data-theme-dir="to-light"]::view-transition-old(root) {
+  animation: none;
+}
+
+html[data-theme-dir="to-dark"]::view-transition-new(root) {
+  animation-name: theme-page-to-left;
+}
+
+html[data-theme-dir="to-light"]::view-transition-new(root) {
+  animation-name: theme-page-to-right;
+}
+
+@keyframes theme-page-to-left {
+  from {
+    clip-path: inset(0 0 0 100%);
+  }
+  to {
+    clip-path: inset(0 0 0 0);
+  }
+}
+
+@keyframes theme-page-to-right {
+  from {
+    clip-path: inset(0 100% 0 0);
+  }
+  to {
+    clip-path: inset(0 0 0 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation: none;
+  }
+}

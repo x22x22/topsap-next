@@ -1,0 +1,24 @@
+# 前端构建产物
+dist/
+node_modules/
+*.local
+
+# Rust
+src-tauri/target/
+src-tauri/gen/
+
+# 编辑器与系统
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# 运行期产物
+*.log
+
+# 安装包产物
+release/
+
+# 文档
+AGENTS.md
+优化.md

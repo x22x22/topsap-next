@@ -1,0 +1,32 @@
+//! 构建脚本：注入 Windows 应用清单。
+//!
+//! 客户端需要创建虚拟网卡、修改路由表与 hosts，必须在进程启动时就具备管理员权限。
+//! 这里通过 requireAdministrator 让 Windows 在启动时直接弹 UAC，而不是运行时再尝试提升。
+
+fn main() {
+    let attrs = tauri_build::Attributes::new()
+        .windows_attributes(tauri_build::WindowsAttributes::new().app_manifest(APP_MANIFEST));
+    tauri_build::try_build(attrs).expect("tauri-build 执行失败");
+}
+
+const APP_MANIFEST: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls"
+        version="6.0.0.0" processorArchitecture="*" publicKeyToken="6595b64144ccf1df" language="*" />
+    </dependentAssembly>
+  </dependency>
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="requireAdministrator" uiAccess="false" />
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}" />
+    </application>
+  </compatibility>
+</assembly>"#;

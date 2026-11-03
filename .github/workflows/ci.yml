@@ -1,0 +1,295 @@
+name: CI/CD
+
+on:
+  push:
+    tags: ["v*"]
+  # 手动触发：仅构建并上传工作流产物，不创建 Release
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BINARY_NAME: topsap-client
+
+jobs:
+  build:
+    name: ${{ matrix.jobName }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
+            artifact: windows-amd64
+            portableOS: windows
+            portableArch: amd64
+            jobName: Windows amd64 打包
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            bundles: nsis
+            artifact: windows-arm64
+            portableOS: windows
+            portableArch: arm64
+            jobName: Windows arm64 打包
+          - os: macos-14
+            target: x86_64-apple-darwin
+            bundles: dmg
+            artifact: macos-amd64
+            portableOS: macos
+            portableArch: amd64
+            jobName: macOS amd64 打包
+          - os: macos-14
+            target: aarch64-apple-darwin
+            bundles: dmg
+            artifact: macos-arm64
+            portableOS: macos
+            portableArch: arm64
+            jobName: macOS arm64 打包
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: deb rpm
+            artifact: linux-amd64
+            portableOS: linux
+            portableArch: amd64
+            jobName: Linux amd64 打包（deb + rpm）
+          - os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+            bundles: deb rpm
+            artifact: linux-arm64
+            portableOS: linux
+            portableArch: arm64
+            jobName: Linux arm64 打包（deb + rpm）
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: 缓存 Rust 构建产物
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
+
+      - name: 安装 Linux 系统依赖
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev rpm
+
+      - name: 解析版本与触发模式
+        id: meta
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+            IS_RELEASE="true"
+            PKG_VERSION=$(node -p "require('./package.json').version")
+            CONF_VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+            CARGO_VERSION=$(node -e "const fs=require('fs');const t=fs.readFileSync('src-tauri/Cargo.toml','utf8');console.log(t.match(/^version = \"([^\"]+)\"/m)[1])")
+            echo "标签: v${VERSION} / package.json: ${PKG_VERSION} / tauri.conf.json: ${CONF_VERSION} / Cargo.toml: ${CARGO_VERSION}"
+            if [ "${VERSION}" != "${PKG_VERSION}" ] || [ "${VERSION}" != "${CONF_VERSION}" ] || [ "${VERSION}" != "${CARGO_VERSION}" ]; then
+              echo "❌ 版本号不一致，请先同步 package.json、Cargo.toml、tauri.conf.json"
+              exit 1
+            fi
+          else
+            VERSION=$(node -p "require('./package.json').version")
+            IS_RELEASE="false"
+            echo "手动触发，使用 package.json 版本 v${VERSION}，不创建 Release"
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "is_release=${IS_RELEASE}" >> $GITHUB_OUTPUT
+
+      - name: 安装前端依赖
+        run: npm ci
+
+      - name: 构建桌面应用
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+
+      - name: 收集安装包与便携版并生成校验和
+        shell: bash
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          TARGET="${{ matrix.target }}"
+          PORTABLE_OS="${{ matrix.portableOS }}"
+          PORTABLE_ARCH="${{ matrix.portableArch }}"
+          BIN_NAME="${BINARY_NAME}"
+          RELEASE_DIR="src-tauri/target/${TARGET}/release"
+          mkdir -p release-assets
+
+          find "${RELEASE_DIR}/bundle" -type f \
+            \( -name "*.exe" -o -name "*.dmg" -o -name "*.deb" -o -name "*.rpm" \) \
+            -exec cp {} release-assets/ \;
+
+          # Linux 包统一命名：topsap-client_<版本>_<amd64|arm64>.deb/.rpm
+          case "${PORTABLE_ARCH}" in
+            arm64) LINUX_ARCH="arm64" ;;
+            *) LINUX_ARCH="amd64" ;;
+          esac
+          for pkg in release-assets/*.deb; do
+            [ -e "${pkg}" ] || continue
+            target="release-assets/${BIN_NAME}_${VERSION}_${LINUX_ARCH}.deb"
+            [ "${pkg}" = "${target}" ] || mv -f "${pkg}" "${target}"
+          done
+          for pkg in release-assets/*.rpm; do
+            [ -e "${pkg}" ] || continue
+            target="release-assets/${BIN_NAME}_${VERSION}_${LINUX_ARCH}.rpm"
+            [ "${pkg}" = "${target}" ] || mv -f "${pkg}" "${target}"
+          done
+
+          BIN="${RELEASE_DIR}/${BIN_NAME}"
+          case "${PORTABLE_OS}" in
+            windows) BIN="${RELEASE_DIR}/${BIN_NAME}.exe" ;;
+          esac
+          PORTABLE_DIR="${BIN_NAME}_${VERSION}_${PORTABLE_OS}_${PORTABLE_ARCH}"
+          mkdir -p "${PORTABLE_DIR}"
+          cp "${BIN}" "${PORTABLE_DIR}/"
+
+          if [ "${PORTABLE_OS}" = "windows" ]; then
+            mkdir -p "${PORTABLE_DIR}/resources"
+            case "${PORTABLE_ARCH}" in
+              arm64)
+                cp "${RELEASE_DIR}/resources/wintun-arm64.dll" "${PORTABLE_DIR}/resources/"
+                WINTUN_NAME="wintun-arm64.dll"
+                ;;
+              *)
+                cp "${RELEASE_DIR}/resources/wintun.dll" "${PORTABLE_DIR}/resources/"
+                WINTUN_NAME="wintun.dll"
+                ;;
+            esac
+            printf '解压后运行 topsap-client.exe，需要管理员权限（创建虚拟网卡、修改路由与 hosts）。\r\nresources\\%s 必须与 exe 保持相对位置不变。\r\n系统需已安装 WebView2 运行时（Windows 10/11 一般自带；Windows 7 需预装 109）。\r\n' "${WINTUN_NAME}" > "${PORTABLE_DIR}/README.txt"
+            powershell.exe -NoProfile -Command "Compress-Archive -Path '${PORTABLE_DIR}\\*' -DestinationPath 'release-assets\\${BIN_NAME}_${VERSION}_${PORTABLE_OS}_${PORTABLE_ARCH}.zip' -Force"
+          elif [ "${PORTABLE_OS}" = "macos" ]; then
+            DMG_FILE=$(find "${RELEASE_DIR}/bundle" -type f -name "*.dmg" 2>/dev/null | head -1)
+            if [ -z "${DMG_FILE}" ]; then
+              echo "⚠️ 未找到 dmg 产物，无法制作便携包"
+              exit 1
+            fi
+            MNT_DIR=$(mktemp -d)
+            hdiutil attach -nobrowse -readonly -mountpoint "${MNT_DIR}" "${DMG_FILE}" >/dev/null
+            APP_DIR=$(find "${MNT_DIR}" -maxdepth 2 -type d -name "*.app" | head -1)
+            cp -R "${APP_DIR}" "${PORTABLE_DIR}/"
+            hdiutil detach "${MNT_DIR}" >/dev/null
+            rm -f "${PORTABLE_DIR}/${BIN_NAME}"
+            printf '解压后将 "TopSAP Client.app" 拖入「应用程序」目录即可使用。\r\n应用需要以 root 权限运行才能创建 TUN 接口与修改路由，请在终端执行：sudo open "/Applications/TopSAP Client.app"。\r\n首次打开如提示「已损坏，无法打开」，请执行：sudo xattr -rd com.apple.quarantine "/Applications/TopSAP Client.app"。\r\n' > "${PORTABLE_DIR}/README.txt"
+            tar -czf "release-assets/${BIN_NAME}_${VERSION}_${PORTABLE_OS}_${PORTABLE_ARCH}.tar.gz" -C "${PORTABLE_DIR}" .
+          else
+            printf '解压后运行 topsap-client，需要 root 权限（创建 TUN 接口、修改路由与 hosts）。\r\n依赖 WebKitGTK 4.1：Ubuntu/Debian 执行 sudo apt-get install libwebkit2gtk-4.1-0。\r\n' > "${PORTABLE_DIR}/README.txt"
+            tar -czf "release-assets/${BIN_NAME}_${VERSION}_${PORTABLE_OS}_${PORTABLE_ARCH}.tar.gz" -C "${PORTABLE_DIR}" .
+          fi
+          rm -rf "${PORTABLE_DIR}"
+
+          cd release-assets
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum * > "SHA256SUMS_${{ matrix.artifact }}.txt"
+          else
+            shasum -a 256 * > "SHA256SUMS_${{ matrix.artifact }}.txt"
+          fi
+          cd ..
+          echo "📦 本次产物："
+          ls -la release-assets
+
+      - name: 生成发布说明
+        id: changelog
+        shell: bash
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)
+          if [[ -n "${PREV_TAG}" ]]; then
+            COMMITS=$(git log --pretty=format:"- %s (%h)" "${PREV_TAG}..HEAD^")
+          else
+            COMMITS=$(git log --pretty=format:"- %s (%h)" HEAD^)
+          fi
+          if [[ -z "${COMMITS}" ]]; then
+            COMMITS="- 与上一版本相比无新增提交"
+          fi
+          if [[ "$VERSION" =~ (alpha|beta|rc|pre) ]]; then
+            IS_PRERELEASE="true"
+            echo "📦 检测到预发布版本: v${VERSION}"
+          else
+            IS_PRERELEASE="false"
+            echo "🚀 正式版本: v${VERSION}"
+          fi
+          echo "is_prerelease=${IS_PRERELEASE}" >> $GITHUB_OUTPUT
+
+          cat > release_notes.md << EOF
+          ## 🎉 TopSAP Client v${VERSION} 发布
+
+          ### 📋 构建信息
+          - **版本**: v${VERSION}
+          - **Commit**: ${GITHUB_SHA:0:7}
+          - **构建时间**: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          ### 📝 更新内容
+          ${COMMITS}
+
+          ### 📦 安装包
+          - Windows AMD64: \`TopSAP Client_${VERSION}_x64-setup.exe\`（NSIS，支持 \`/S\` 静默安装）
+          - Windows ARM64: \`TopSAP Client_${VERSION}_arm64-setup.exe\`（NSIS）
+          - macOS Intel: \`TopSAP Client_${VERSION}_x64.dmg\`
+          - macOS Apple 芯片: \`TopSAP Client_${VERSION}_aarch64.dmg\`
+          - Linux AMD64 (Ubuntu/Debian): \`topsap-client_${VERSION}_amd64.deb\`
+          - Linux ARM64 (Ubuntu/Debian): \`topsap-client_${VERSION}_arm64.deb\`
+          - Linux AMD64 (Fedora/RHEL): \`topsap-client_${VERSION}_amd64.rpm\`
+          - Linux ARM64 (Fedora/RHEL): \`topsap-client_${VERSION}_arm64.rpm\`
+
+          ### 🗂️ 便携版（免安装）
+          - Windows AMD64: \`${BINARY_NAME}_${VERSION}_windows_amd64.zip\`
+          - Windows ARM64: \`${BINARY_NAME}_${VERSION}_windows_arm64.zip\`
+          - macOS Intel: \`${BINARY_NAME}_${VERSION}_macos_amd64.tar.gz\`
+          - macOS Apple 芯片: \`${BINARY_NAME}_${VERSION}_macos_arm64.tar.gz\`
+          - Linux AMD64: \`${BINARY_NAME}_${VERSION}_linux_amd64.tar.gz\`
+          - Linux ARM64: \`${BINARY_NAME}_${VERSION}_linux_arm64.tar.gz\`
+
+          ### 🔐 校验和
+          各架构校验和文件以 \`SHA256SUMS_<平台>.txt\` 命名，下载后执行 \`sha256sum -c SHA256SUMS_<平台>.txt\` 验证完整性。
+
+          详细更新日志见仓库 \`verchanglog/v${VERSION}.md\`。
+
+          ### ⚠️ 平台与权限说明
+          - Windows：安装包启动时请求管理员权限；Windows 7 需预装 WebView2 109 与 VC++ 运行库。
+          - macOS / Linux：需要 root 或 sudo 运行以创建 TUN 接口与修改路由；应用未做 Apple 签名与公证。
+          - 网关证书普遍自签或已过期，客户端按协议要求跳过证书链校验且不发送 SNI。请仅在可信网络中使用，并通过其他渠道核对网关地址。
+          EOF
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v7
+        with:
+          name: topsap-client-${{ matrix.artifact }}
+          path: release-assets/*
+          if-no-files-found: error
+
+      - name: 创建 GitHub Release
+        if: steps.meta.outputs.is_release == 'true'
+        uses: softprops/action-gh-release@v3
+        with:
+          body_path: release_notes.md
+          draft: false
+          prerelease: ${{ steps.changelog.outputs.is_prerelease == 'true' }}
+          generate_release_notes: false
+          files: release-assets/**
