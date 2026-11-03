@@ -49,7 +49,7 @@ Credentials stay on your machine (system credential manager first), and disconne
 - **Virtual adapter** — Creates a `TopSAP` adapter through Microsoft-signed Wintun, assigns the virtual IP and MTU 1400; `wintun.dll` ships with the app.
 - **Intranet host information** — Parses the gateway-provided `dns_info.dns_list` and keeps it in session data; it never edits the system hosts file, matching the official client.
 - **Live stats and session details** — After connecting, show the resource list, gateway/account/version/tunnel details, a 60-second traffic chart and current/previous login IP and time records; the runtime log stays visible.
-- **Clean disconnect** — Routes, DNS and the adapter session are rolled back in reverse order from a ledger; quitting the app disconnects first.
+- **Clean disconnect** — Routes, DNS and the adapter session are rolled back in reverse order from a ledger; normal quit, system shutdown and termination signals attempt a bounded disconnect; sessions left by a forced kill or power loss are logged out on the next launch/connect.
 - **Auto reconnect** — Exponential backoff (up to 5 attempts) when the tunnel drops unexpectedly; manual disconnects never trigger it, and it can be disabled in settings.
 - **Adapter self-test** — Without touching the gateway, verifies admin rights, driver loading, adapter creation, address assignment, read-back, test route and bidirectional packet flow in seconds — separating adapter faults from protocol faults.
 - **Residue detection** — Older versions could leave a hosts block after an abrupt exit; the Diagnostics page can detect and remove it in one click.
@@ -201,7 +201,7 @@ Artifacts land in `src-tauri/target/release/bundle/nsis/`. The main binary manif
 5. **Wait for connection** — States go through probing, login, adapter creation, tunnel handshake and route injection; the app then shows the virtual IP, route count and live traffic.
 6. **Disconnect** — Use the Disconnect button or the tray menu; the app logs out, removes routes and restores DNS and the adapter. While connected, use Change password to update the current account password.
 7. **When it fails** — Run the adapter self-test on the Diagnostics page first; it never touches the gateway and separates driver/adapter issues from protocol issues, reporting concrete Win32 error codes.
-8. **After an abrupt exit** — Relaunch, let the Diagnostics page detect hosts residue left by older versions, clean it, then connect and disconnect once to finish route cleanup.
+8. **After an abrupt exit** — Relaunch; the app retries the unfinished logout automatically, and the TUN adapter and routes are released when the process handles close or the system reboots. Legacy hosts residue can still be removed on the Diagnostics page.
 
 > The official client must be fully closed, otherwise single-sign-on conflicts (`Ret=-40077`) occur.
 
@@ -220,10 +220,10 @@ Frontend and backend talk over Tauri IPC — no TCP ports listened on
 - **Certificate validation is skipped (protocol requirement)** — Gateway certificates are usually self-signed or expired, and the official client does not validate them either; this client also skips chain validation and sends no SNI. That means TLS cannot identify a man-in-the-middle — **use it only on trusted networks** and verify the gateway address through another channel.
 - **Credentials travel in plaintext inside TLS** — The gateway requires plaintext `U/P`; the security boundary is the TLS channel itself.
 - **Administrator rights are required** — Unavoidable for changing system network configuration; the app only touches routes, DNS and the virtual adapter.
-- **Password storage** — Windows Credential Manager first; falls back to a machine-bound AES-256-GCM file. Passwords, captchas and `session_id` never enter logs or events.
-- **Portable layout on Windows** — Settings, logs and WebView2 data live next to the executable: `config\` (settings, connection profiles, credential fallback), `data\logs\` (`client.log`) and `webview\` (WebView2 user data, containing `EBWebView`). Keep the app in a writable folder; upgrades and reinstalls reuse these directories, so delete them manually for a full cleanup.
+- **Password storage** — Windows Credential Manager first; falls back to a machine-bound AES-256-GCM file. Passwords, captchas and `session_id` never enter logs or events; the abnormal-exit session marker stores only the gateway, port and `session_id`, encrypted with the same machine-bound AES-256-GCM key.
+- **Portable layout on Windows** — Settings, logs and WebView2 data live next to the executable: `config\` (settings, connection profiles, credential fallback, abnormal-exit session marker), `data\logs\` (`client.log`) and `webview\` (WebView2 user data, containing `EBWebView`). Keep the app in a writable folder; upgrades and reinstalls reuse these directories, so delete them manually for a full cleanup.
 - **Log location** — `data\logs\client.log` next to the executable (2 MB rotation, one `client.old.log` kept); open it from the Settings window. macOS and Linux keep using the standard system log directory.
-- **Residue cleanup** — A forced kill skips cleanup and may leave routes behind; older versions could also leave a hosts block. Relaunch and disconnect normally to finish route cleanup, and remove any legacy hosts block on the Diagnostics page.
+- **Residue cleanup** — A forced kill or power loss skips client-side cleanup, but the TUN adapter and routes are released when the process handles close or the system reboots; an unfinished logout is recorded encrypted and retried on the next launch/connect so the SSO slot is not left occupied. Legacy hosts blocks can still be removed on the Diagnostics page.
 
 ## FAQ
 
@@ -233,7 +233,7 @@ Check in order: gateway address and port, account/password validity, captcha cor
 
 **It says the account is logged in elsewhere (`Ret=-40077`).**
 
-Another session still holds the account. Make sure neither the official client nor this client has a leftover process, wait for the other session to time out, or ask the administrator to release it.
+Another session still holds the account. Make sure neither the official client nor this client has a leftover process. This client records sessions left unresolved by a forced kill, crash or shutdown and retries the logout on the next launch/connect; if the message persists, wait for the gateway session to time out or ask the administrator to release it.
 
 **It says the captcha is wrong (`Ret=-40018`).**
 
@@ -297,6 +297,8 @@ topsap-next/
 │   │   ├── platform.rs         Runtime detection (Windows 7 compatibility branch)
 │   │   ├── tls.rs              Shared TLS configuration
 │   │   ├── dto.rs / settings.rs / secret_store.rs / proxy_bypass.rs
+│   │   ├── session_guard.rs     Abnormal-exit session marker and deferred logout
+│   │   ├── shutdown.rs          Bounded disconnect on shutdown/termination
 │   ├── resources/wintun.dll    Bundled virtual adapter driver
 │   ├── icons/                  App icons (source: source.svg)
 │   ├── build.rs                Injects the requireAdministrator manifest

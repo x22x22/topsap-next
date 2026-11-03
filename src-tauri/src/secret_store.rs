@@ -60,36 +60,44 @@ fn machine_key() -> [u8; 32] {
     hasher.finalize().into()
 }
 
-fn save_fallback(app: &AppHandle, user: &str, password: &str) -> Result<(), String> {
-    let path = fallback_path(app, user)?;
+/// 使用机器绑定密钥加密任意字节，供凭据与异常退出会话标记共用
+pub(crate) fn seal_bytes(plaintext: &[u8]) -> Result<Vec<u8>, String> {
     let cipher =
         Aes256Gcm::new_from_slice(&machine_key()).map_err(|e| format!("初始化加密器失败：{e}"))?;
 
     let mut nonce_bytes = [0u8; NONCE_LEN];
     rand::thread_rng().fill_bytes(&mut nonce_bytes);
-    let nonce = Nonce::from_slice(&nonce_bytes);
-
     let ciphertext = cipher
-        .encrypt(nonce, password.as_bytes())
-        .map_err(|_| "加密凭据失败".to_string())?;
+        .encrypt(Nonce::from_slice(&nonce_bytes), plaintext)
+        .map_err(|_| "加密数据失败".to_string())?;
 
     let mut out = nonce_bytes.to_vec();
     out.extend_from_slice(&ciphertext);
+    Ok(out)
+}
+
+/// 解密 `seal_bytes` 的输出；密钥不匹配或数据损坏时返回 None
+pub(crate) fn open_bytes(sealed: &[u8]) -> Option<Vec<u8>> {
+    if sealed.len() <= NONCE_LEN {
+        return None;
+    }
+    let cipher = Aes256Gcm::new_from_slice(&machine_key()).ok()?;
+    let (nonce_bytes, ciphertext) = sealed.split_at(NONCE_LEN);
+    cipher
+        .decrypt(Nonce::from_slice(nonce_bytes), ciphertext)
+        .ok()
+}
+
+fn save_fallback(app: &AppHandle, user: &str, password: &str) -> Result<(), String> {
+    let path = fallback_path(app, user)?;
+    let out = seal_bytes(password.as_bytes())?;
     std::fs::write(&path, out).map_err(|e| format!("写入凭据文件失败：{e}"))
 }
 
 fn load_fallback(app: &AppHandle, user: &str) -> Option<String> {
     let path = fallback_path(app, user).ok()?;
     let bytes = std::fs::read(path).ok()?;
-    if bytes.len() <= NONCE_LEN {
-        return None;
-    }
-    let cipher = Aes256Gcm::new_from_slice(&machine_key()).ok()?;
-    let (nonce_bytes, ciphertext) = bytes.split_at(NONCE_LEN);
-    let plaintext = cipher
-        .decrypt(Nonce::from_slice(nonce_bytes), ciphertext)
-        .ok()?;
-    String::from_utf8(plaintext).ok()
+    String::from_utf8(open_bytes(&bytes)?).ok()
 }
 
 #[cfg(test)]
@@ -102,6 +110,17 @@ mod tests {
         let b = machine_key();
         assert_eq!(a, b);
         assert!(a.iter().any(|b| *b != 0));
+    }
+
+    #[test]
+    fn 通用字节加解密可往返() {
+        let sealed = seal_bytes(b"session-guard").unwrap();
+        assert_eq!(open_bytes(&sealed).unwrap(), b"session-guard");
+    }
+
+    #[test]
+    fn 截断密文无法解密() {
+        assert!(open_bytes(&[0u8; 4]).is_none());
     }
 
     #[test]

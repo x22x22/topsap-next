@@ -212,8 +212,10 @@ TopSAP-Next/
 │       ├── dto.rs               # 跨领域 DTO
 │       ├── settings.rs
 │       ├── profiles.rs          # 连接配置存储与导入导出
-│       ├── proxy_bypass.rs      # Windows 系统代理绕过列表
+│       ├── proxy_bypass.rs      # 三平台系统代理绕过列表
 │       ├── secret_store.rs
+│       ├── session_guard.rs     # 异常退出会话标记与下次启动补注销
+│       ├── shutdown.rs          # 系统关机/终止信号下的限时断开
 │       ├── auth/{mod,client,error,parser}.rs
 │       ├── protocol/{mod,frame,consts}.rs
 │       ├── tunnel/{mod,client,verifier}.rs
@@ -309,6 +311,8 @@ TLS 建连（不校验证书、不发 SNI）
 | `settings` | 应用设置读写与校验 | `AppSettings` |
 | `proxy_bypass` | Windows / macOS / Linux 系统代理绕过列表同步 | `ProxyBypassStatus` |
 | `secret_store` | keyring 优先 + AES-GCM 回退 | `SecretStore` |
+| `session_guard` | 异常退出会话标记、启动/连接前补注销 | `PendingSession`, `purge()` |
+| `shutdown` | Windows `WM_ENDSESSION`、Unix 终止信号下的限时断开 | `quick_disconnect_blocking` |
 
 ### 7.2 错误约定
 
@@ -363,7 +367,34 @@ type WintunCreateAdapter = unsafe extern "system" fn(*const u16, *const u16, *co
 
 - `CleanupLedger` 记录每条注入的路由与 DNS 改动
 - 断开时逆序撤销
-- 启动时检测孤儿残留（标记段/`TopSAP` 路由），提供"一键清理"
+- 启动时只检测旧版本 hosts 标记段；TUN 网卡与路由随进程句柄关闭或系统重启回收
+
+### 7.5 异常退出补偿
+
+正常退出、系统关机与终止信号的处理链路：
+
+| 场景 | 入口 | 行为 |
+| --- | --- | --- |
+| 托盘退出 / 最后窗口关闭 | `RunEvent::ExitRequested` | 阻止退出，等待 `disconnect()` 完成后再退出 |
+| Windows 关机/注销 | 主窗口子类过程的 `WM_ENDSESSION` | 抢在 Tao `process::exit` 前限时断开 2 秒 |
+| Linux/macOS 终止信号 | `SIGTERM` / `SIGINT` | 限时断开后退出 |
+| macOS AppKit 终止 | `RunEvent::Exit` | 最后一道限时断开兜底 |
+| 强杀 / 崩溃 / 断电 | 无进程内入口 | 登录后写入加密会话标记，下次启动/连接前补注销 |
+
+```mermaid
+flowchart TD
+    A[登录成功] --> B[写入 session_guard.bin]
+    B --> C{退出方式}
+    C -->|正常退出| D[disconnect + logout]
+    C -->|关机/信号| E[限时 2 秒 disconnect + logout]
+    C -->|强杀/断电| F[标记保留]
+    D --> G[清除标记]
+    E --> G
+    F --> H[下次启动/连接前 purge]
+    H --> G
+```
+
+标记只保存网关、端口、`session_id` 与时间，使用机器绑定 AES-256-GCM 加密，Unix 下权限 0600；超过 24 小时不再重试。
 
 ---
 
@@ -440,6 +471,7 @@ export const api = {
 | 项 | 措施 |
 | --- | --- |
 | 密码落盘 | keyring（Windows 凭据管理器）；失败回退 AES-256-GCM + 机器标识派生密钥 |
+| 会话标记 | 仅保存网关、端口与 `session_id`；AES-256-GCM + 机器绑定密钥，Unix 权限 0600，超过 24 小时不再重试 |
 | 存储位置 | Windows 便携布局：`<exe>/config`、`<exe>/data/logs`、`<exe>/webview`；macOS/Linux 使用系统标准目录 |
 | 日志脱敏 | 密码、验证码、session_id、SPA key 一律不进日志 |
 | CSP | 生产禁用 `unsafe-eval`，仅允许自身资源与 `data:` 图片 |
@@ -484,8 +516,9 @@ cargo test --lib
 2. 登录 → 验证码 → 成功，显示虚拟 IP 与路由数
 3. 连接后 `ping`/`curl` 内网地址有真实响应
 4. 断开后路由表回到基线，网卡断开
-5. 强杀进程后重新启动，能检测并清理孤儿路由
-6. 二次启动不产生第二个实例
+5. 强杀进程后重新启动，日志出现「已补注销」，本地无残留网卡/路由
+6. 系统关机/注销时日志出现限时断开记录，重启后可正常登录
+7. 二次启动不产生第二个实例
 
 ---
 
@@ -498,7 +531,7 @@ cargo test --lib
 | NSIS 提权 manifest 未生效 | 无法建网卡 | 构建后检查嵌入 manifest |
 | 网关证书/协议变更 | 连接失败 | 错误分类明确，保留原始响应片段 |
 | 企业安全软件拦截 | 无法加载 DLL | 提示用户加白，记录具体错误码 |
-| 强杀残留 | 路由污染 | 启动孤儿检测 + 一键清理 |
+| 强杀/断电 | 网关注销缺失 | 会话标记 + 下次启动补注销；本地网卡与路由由系统回收 |
 
 ---
 
@@ -511,6 +544,6 @@ cargo test --lib
 | 网卡 | koffi 绑 wintun | libloading 绑 wintun，同一 API |
 | 路由 | netsh/route + 回读 | 同策略，Rust 实现 |
 | 配置存储 | safeStorage | keyring + AES-GCM 回退 |
-| 异常退出 | 残留 28 条路由 | 启动孤儿检测 + 清理 |
+| 异常退出 | 残留 28 条路由 | 会话标记 + 下次启动补注销；本地网卡/路由随句柄回收 |
 | 自动重连 | 无 | 指数退避，最多 5 次 |
 | 托盘 | 无 | 有 |

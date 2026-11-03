@@ -20,6 +20,7 @@ use crate::dto::{
 };
 use crate::netcfg::NetConfig;
 use crate::password_reset;
+use crate::session_guard;
 use crate::tls;
 use crate::tun::{TunDevice, ADAPTER_NAME};
 use crate::tunnel::{self, TunnelEvent, TunnelHandle};
@@ -200,6 +201,15 @@ impl Engine {
     pub fn needs_cleanup(&self) -> bool {
         let inner = self.lock();
         inner.tun.is_some() || inner.tunnel.is_some() || inner.net.is_some()
+    }
+
+    /// 启动或连接前补注销上次异常退出留下的会话
+    pub async fn purge_previous_session(&self) {
+        match session_guard::purge(&self.app).await {
+            Ok(true) => self.log("检测到上次会话未正常注销，已补注销"),
+            Ok(false) => {}
+            Err(err) => self.log(format!("上次会话补注销失败：{err}")),
+        }
     }
 
     pub fn snapshot(&self) -> StatsDto {
@@ -508,14 +518,16 @@ impl Engine {
             self.disconnect().await?;
         }
 
+        self.set_phase(Phase::Probing, "正在检查上次会话");
+        self.purge_previous_session().await;
+        self.set_phase(Phase::Probing, "正在探测网关");
+
         let cancel = {
             let mut inner = self.lock();
             inner.cancel = CancellationToken::new();
             inner.user_disconnect = false;
             inner.cancel.clone()
         };
-
-        self.set_phase(Phase::Probing, "正在探测网关");
         let candidates = build_candidates(&form);
         let (gateway, port, param, auth_cookie) =
             match select_line(&candidates, form.connect_type, form.connect_timeout).await {
@@ -674,6 +686,15 @@ impl Engine {
         }
         session.gateway = gateway.clone();
         session.port = port;
+        if let Err(err) = session_guard::save(
+            &self.app,
+            &session.gateway,
+            session.port,
+            &session.session_id,
+            &form.user,
+        ) {
+            self.log(format!("警告：无法记录会话保护标记：{err}"));
+        }
         if let Ok(ip) = tls::resolve_ip(&gateway).await {
             session.gateway_ip = Some(ip.to_string());
         }
@@ -697,6 +718,17 @@ impl Engine {
         }
 
         if let Err(err) = self.establish(&session, &cancel).await {
+            let mut cleanup = AuthClient::new_with_timeout(
+                session.gateway.clone(),
+                session.port,
+                String::new(),
+                String::new(),
+                Duration::from_secs(2),
+            );
+            match cleanup.logout(&session.session_id).await {
+                Ok(()) => session_guard::clear(&self.app),
+                Err(_) => self.log("连接失败后的会话注销未完成，将在下次启动时重试"),
+            }
             // 建卡/隧道/路由任一步失败都要清空会话，避免界面残留虚拟 IP
             {
                 let mut inner = self.lock();
@@ -852,7 +884,10 @@ impl Engine {
     pub async fn disconnect(self: &Arc<Self>) -> Result<(), String> {
         let active = {
             let inner = self.lock();
-            inner.phase != Phase::Idle || inner.tunnel.is_some() || inner.tun.is_some()
+            inner.phase != Phase::Idle
+                || inner.tunnel.is_some()
+                || inner.tun.is_some()
+                || inner.net.is_some()
         };
         if !active {
             return Ok(());
@@ -904,9 +939,30 @@ impl Engine {
             })
             .await;
         }
-        if let Some(mut net) = net {
-            net.cleanup().await;
-        }
+        let logout = async {
+            if let Some(session) = session {
+                if session.session_id.trim().is_empty() {
+                    return;
+                }
+                let mut auth = AuthClient::new(
+                    session.gateway.clone(),
+                    session.port,
+                    String::new(),
+                    String::new(),
+                );
+                match auth.logout(&session.session_id).await {
+                    Ok(()) => session_guard::clear(&self.app),
+                    Err(_) => self.log("注销会话失败，单点登录名额可能需要等待超时释放"),
+                }
+            }
+        };
+        let cleanup = async move {
+            if let Some(mut net) = net {
+                net.cleanup().await;
+            }
+        };
+        tokio::join!(logout, cleanup);
+
         {
             let mut inner = self.lock();
             inner.tun = None;
@@ -914,17 +970,6 @@ impl Engine {
         }
         drop(tunnel);
 
-        if let Some(session) = session {
-            let mut auth = AuthClient::new(
-                session.gateway.clone(),
-                session.port,
-                String::new(),
-                String::new(),
-            );
-            if auth.logout(&session.session_id).await.is_err() {
-                self.log("注销会话失败，单点登录名额可能需要等待超时释放");
-            }
-        }
         {
             let mut inner = self.lock();
             inner.session = None;

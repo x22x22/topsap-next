@@ -32,12 +32,25 @@ impl AuthClient {
         user: impl Into<String>,
         pass: impl Into<String>,
     ) -> Self {
-        let host = host.into();
-        let http = HttpClient::new(
-            host.clone(),
+        Self::new_with_timeout(
+            host,
             port,
+            user,
+            pass,
             Duration::from_secs(REQUEST_TIMEOUT_SECS),
-        );
+        )
+    }
+
+    /// 指定单次请求超时，供异常退出后的补注销等短超时场景使用
+    pub fn new_with_timeout(
+        host: impl Into<String>,
+        port: u16,
+        user: impl Into<String>,
+        pass: impl Into<String>,
+        timeout: Duration,
+    ) -> Self {
+        let host = host.into();
+        let http = HttpClient::new(host.clone(), port, timeout);
         Self {
             host,
             port,

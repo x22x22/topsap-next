@@ -15,7 +15,9 @@ pub mod protocol;
 pub mod proxy_bypass;
 pub mod secret_store;
 pub mod session;
+pub mod session_guard;
 pub mod settings;
+pub mod shutdown;
 pub mod tls;
 pub mod tun;
 pub mod tunnel;
@@ -55,6 +57,13 @@ pub fn run() {
             let dll_path = resolve_dll(app.handle())?;
             let engine = Engine::new(app.handle().clone(), dll_path.clone());
             app.manage(AppState { engine, dll_path });
+            {
+                let engine = app.state::<AppState>().engine.clone();
+                tauri::async_runtime::spawn(async move {
+                    engine.purge_previous_session().await;
+                });
+            }
+            crate::shutdown::install(app.handle());
             let settings = crate::settings::load(app.handle());
             if let Err(err) = crate::proxy_bypass::apply(app.handle(), &settings) {
                 log::warn!("启动时应用代理绕过失败：{err}");
@@ -107,8 +116,8 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("构建 Tauri 应用失败");
 
-    app.run(|app_handle, event| {
-        if let RunEvent::ExitRequested { api, .. } = event {
+    app.run(|app_handle, event| match event {
+        RunEvent::ExitRequested { api, .. } => {
             let state = app_handle.state::<AppState>();
             if state.engine.needs_cleanup() {
                 // 退出前先断开，确保路由、DNS 与网卡都被清理
@@ -121,6 +130,14 @@ pub fn run() {
                 });
             }
         }
+        // macOS 的 AppKit 终止与部分异常退出不会触发 ExitRequested，这里补最后一道清理
+        RunEvent::Exit => {
+            let state = app_handle.state::<AppState>();
+            if state.engine.needs_cleanup() {
+                crate::shutdown::quick_disconnect_blocking(&state.engine);
+            }
+        }
+        _ => {}
     });
 }
 
