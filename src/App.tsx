@@ -28,6 +28,7 @@ export default function App() {
   const [page, setPage] = useState<PageId>("connect");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [elevationNoticeOpen, setElevationNoticeOpen] = useState(true);
+  const [importNoticeOpen, setImportNoticeOpen] = useState(true);
   const [summary, setSummary] = useState<SessionSummary | null>(null);
   const [resolvedTheme, setResolvedTheme] = useState<"dark" | "light">("dark");
   const [collapsed, setCollapsed] = useState(
@@ -43,11 +44,21 @@ export default function App() {
     queryKey: queryKeys.settings,
     queryFn: api.loadSettings,
   });
+  const connectionsQuery = useQuery({
+    queryKey: ["connections"],
+    queryFn: api.listConnections,
+  });
 
   const themeMode = settingsQuery.data?.theme ?? "system";
   const appInfo = infoQuery.data;
   const needsRootNotice =
     appInfo?.platform === "linux" && !appInfo.elevated && elevationNoticeOpen;
+  const noConnectionConfig =
+    connectionsQuery.data !== undefined &&
+    settingsQuery.data !== undefined &&
+    connectionsQuery.data.connections.length === 0 &&
+    !settingsQuery.data.gateway.trim();
+  const needsImportNotice = noConnectionConfig && importNoticeOpen && !needsRootNotice;
 
   const toggleCollapsed = useCallback(() => {
     setCollapsed((prev) => {
@@ -217,6 +228,33 @@ export default function App() {
             {t("便携包请把路径替换为实际的 topsap-client 路径。")}
           </p>
         </div>
+      </Modal>
+
+      <Modal
+        open={needsImportNotice}
+        title={t("尚未导入连接配置")}
+        description={t("请先前往「设置」-「连接管理」中导入配置")}
+        onClose={() => setImportNoticeOpen(false)}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setImportNoticeOpen(false)}>
+              {t("稍后")}
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => {
+                setImportNoticeOpen(false);
+                setSettingsOpen(true);
+              }}
+            >
+              {t("前往设置")}
+            </Button>
+          </>
+        }
+      >
+        <p className="text-xs leading-relaxed text-muted">
+          {t("导入后可直接选择网关与线路，无需每次手动填写。")}
+        </p>
       </Modal>
 
       <Toaster

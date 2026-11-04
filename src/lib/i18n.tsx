@@ -363,6 +363,13 @@ const EN: Record<string, string> = {
   "便携包请把路径替换为实际的 topsap-client 路径。":
     "For the portable build, replace the path with the actual topsap-client path.",
   "我知道了": "Got it",
+  "尚未导入连接配置": "No connection profiles yet",
+  "请先前往「设置」-「连接管理」中导入配置":
+    "Import a profile first in Settings > Connection profiles.",
+  "导入后可直接选择网关与线路，无需每次手动填写。":
+    "After importing, you can select a gateway and lines instead of entering them manually each time.",
+  "稍后": "Later",
+  "前往设置": "Open settings",
   // 诊断
   "残留检查": "Residue check",
   "旧版本异常退出可能留下 hosts 标记段，检测到后可一键清理":
