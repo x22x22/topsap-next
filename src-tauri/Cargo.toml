@@ -32,7 +32,7 @@ rustls-pki-types = "1"
 
 libloading = "0.8"
 
-keyring = { version = "3", features = ["windows-native"] }
+keyring = { version = "3", features = ["windows-native", "apple-native", "sync-secret-service", "crypto-rust"] }
 aes-gcm = "0.10"
 machine-uid = "0.5"
 sha2 = "0.10"

@@ -1,8 +1,11 @@
 //! 凭据存储。
 //!
-//! 优先使用系统钥匙串（Windows 凭据管理器）；不可用时回退为
-//! 「机器标识派生密钥 + AES-256-GCM」的本地加密文件。
+//! 优先使用系统钥匙串（Windows 凭据管理器 / macOS Keychain / Linux Secret Service）；
+//! 不可用时回退为「机器标识派生密钥 + AES-256-GCM」的本地加密文件。
 //! 密码只在这两种形态中出现，不写日志、不进事件 payload。
+//!
+//! keyring 必须启用各平台原生后端：缺少对应 feature 时会退化为进程内 mock，
+//! 表现为保存成功但重启后读不到，因此 Cargo.toml 同时启用 Windows / macOS / Linux 后端。
 
 use std::path::PathBuf;
 
