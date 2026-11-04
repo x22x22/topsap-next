@@ -152,7 +152,9 @@ export default function App() {
             onClearLogs={engine.clearLogs}
           />
         ) : null}
-        {page === "diagnostics" ? <DiagnosticsPage /> : null}
+        <div className={page === "diagnostics" ? "" : "hidden"}>
+          <DiagnosticsPage />
+        </div>
       </AppShell>
 
       <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
