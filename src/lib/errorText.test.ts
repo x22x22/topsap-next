@@ -64,6 +64,16 @@ describe("localizeError", () => {
     );
   });
 
+  it("区分 TUN 权限不足与网卡占用", () => {
+    expect(
+      localizeError(
+        "创建 TUN 设备失败：网卡 topsap0 已被占用，可能是上次自检或连接未退出；请退出所有 TopSAP 实例，或执行 sudo ip link del topsap0 后重试",
+      ),
+    ).toBe(
+      "Failed to create the TUN device: adapter topsap0 is already in use, likely left by a previous self-test or connection. Quit all TopSAP instances, or run sudo ip link del topsap0 and retry.",
+    );
+  });
+
   it("翻译 Linux 网卡配置权限错误", () => {
     expect(
       localizeError(

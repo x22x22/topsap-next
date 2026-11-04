@@ -29,6 +29,23 @@ describe("localizeSelfTestDetail", () => {
     );
   });
 
+  it("区分 TUN 权限不足与网卡占用", () => {
+    expect(
+      localizeSelfTestDetail(
+        "创建 TUN 设备失败：当前用户没有创建 TUN 接口的权限；Linux 版需要以 root 运行，请在终端执行 sudo /usr/bin/topsap-client 启动应用",
+      ),
+    ).toBe(
+      "Failed to create the TUN device: the current user lacks permission to create a TUN interface. The Linux build must run as root; start it from a terminal with sudo /usr/bin/topsap-client.",
+    );
+    expect(
+      localizeSelfTestDetail(
+        "创建 TUN 设备失败：网卡 topsap0 已被占用，可能是上次自检或连接未退出；请退出所有 TopSAP 实例，或执行 sudo ip link del topsap0 后重试",
+      ),
+    ).toBe(
+      "Failed to create the TUN device: adapter topsap0 is already in use, likely left by a previous self-test or connection. Quit all TopSAP instances, or run sudo ip link del topsap0 and retry.",
+    );
+  });
+
   it("翻译 Linux 未提权提示", () => {
     expect(
       localizeSelfTestDetail(

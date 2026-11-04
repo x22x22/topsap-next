@@ -33,6 +33,37 @@ pub(crate) fn sudo_command() -> String {
         .unwrap_or_else(|_| "sudo /usr/bin/topsap-client".to_string())
 }
 
+/// 按 errno 区分权限不足与网卡占用，返回可操作的提示
+fn tun_create_error(err: &tun::Error, name: &str) -> String {
+    #[cfg(target_os = "macos")]
+    let _ = name;
+    #[cfg(target_os = "linux")]
+    if let tun::Error::Io(io) = err {
+        match io.raw_os_error() {
+            Some(libc::EPERM) | Some(libc::EACCES) => {
+                return format!(
+                    "创建 TUN 设备失败：当前用户没有创建 TUN 接口的权限；Linux 版需要以 root 运行，请在终端执行 {} 启动应用",
+                    sudo_command()
+                );
+            }
+            Some(libc::EBUSY) => {
+                return format!(
+                    "创建 TUN 设备失败：网卡 {name} 已被占用，可能是上次自检或连接未退出；请退出所有 TopSAP 实例，或执行 sudo ip link del {name} 后重试"
+                );
+            }
+            _ => {}
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        format!("创建 TUN 设备失败：{err}（请检查 /dev/net/tun 是否可用以及运行权限）")
+    }
+    #[cfg(target_os = "macos")]
+    {
+        format!("创建 TUN 设备失败：{err}（请检查特权 helper 或 root 权限）")
+    }
+}
+
 impl TunDevice {
     pub fn open(dll_path: &std::path::Path, name: &str) -> Result<Self, TunError> {
         Self::open_with(dll_path, name, None, None)
@@ -109,11 +140,8 @@ impl TunDevice {
             config.name(name).mtu(1400).up();
         }
 
-        let device = tun::create(&config).map_err(|err| {
-            TunError::Adapter(format!(
-                "创建 TUN 设备失败：{err}（请检查特权 helper 或 root 权限）"
-            ))
-        })?;
+        let device =
+            tun::create(&config).map_err(|err| TunError::Adapter(tun_create_error(&err, name)))?;
         device
             .set_nonblock()
             .map_err(|err| TunError::Adapter(format!("配置 TUN 非阻塞模式失败：{err}")))?;
