@@ -37,6 +37,24 @@ describe("localizeError", () => {
     );
   });
 
+  it("翻译登录时要求改密的提示", () => {
+    expect(localizeError("登录用户密码有效期已到，请修改密码")).toBe(
+      "Your password has expired. Change it to continue.",
+    );
+    expect(localizeError("密码过于简单，请修改密码")).toBe(
+      "Your password is too weak. Change it to continue.",
+    );
+    expect(localizeError("首次登录，请修改初始密码")).toBe(
+      "First login: change the initial password.",
+    );
+    expect(localizeError("管理员要求修改密码")).toBe(
+      "The administrator requires a password change.",
+    );
+    expect(localizeError("需要修改密码后才能登录")).toBe(
+      "Change your password before signing in",
+    );
+  });
+
   it("翻译会话与连接状态错误", () => {
     expect(localizeError("已有连接操作正在进行，请稍候")).toBe(
       "A connection operation is already in progress. Please wait.",
