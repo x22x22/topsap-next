@@ -29,6 +29,16 @@ describe("localizeSelfTestDetail", () => {
     );
   });
 
+  it("翻译 Linux 未提权提示", () => {
+    expect(
+      localizeSelfTestDetail(
+        "当前未以 root 运行，无法创建 TUN 接口；请在终端执行 sudo /usr/bin/topsap-client 启动应用",
+      ),
+    ).toBe(
+      "Not running as root; the TUN interface cannot be created. Start the app from a terminal with sudo /usr/bin/topsap-client.",
+    );
+  });
+
   it("翻译 Linux 残留清理结果", () => {
     expect(localizeSelfTestDetail("已删除遗留的 topsap0 虚拟网卡")).toBe(
       "Removed the leftover topsap0 TUN interface",

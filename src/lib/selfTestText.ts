@@ -8,6 +8,8 @@ const DETAIL_EN: Array<[RegExp, string]> = [
     "Not elevated; the virtual adapter cannot be created. Run as administrator."],
   [/^未提权，无法创建 TUN 接口；请重新启动并在系统授权框中允许管理员权限，或以 root\/sudo 运行$/,
     "Not elevated; the TUN interface cannot be created. Restart and allow administrator access, or run as root/sudo."],
+  [/^当前未以 root 运行，无法创建 TUN 接口；请在终端执行 (.+) 启动应用$/,
+    "Not running as root; the TUN interface cannot be created. Start the app from a terminal with $1."],
   [/^文件不存在：(.+)$/, "File not found: $1"],
   [/^找不到 wintun\.dll：(.+)$/, "wintun.dll not found: $1"],
   [/^加载 wintun\.dll 失败：(.+)$/, "Failed to load wintun.dll: $1"],

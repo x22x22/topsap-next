@@ -727,7 +727,9 @@ function elevationHint(platform: string, t: (zh: string) => string): string {
     );
   }
   if (platform === "linux") {
-    return t("当前未以 root 运行，无法创建 TUN 接口与注入路由。请使用 sudo 启动应用。");
+    return t(
+      "当前未以 root 运行，无法创建 TUN 接口与注入路由。请在终端执行 sudo /usr/bin/topsap-client 启动应用。",
+    );
   }
   return t(
     "当前未以管理员身份运行，创建虚拟网卡与注入路由会失败。请右键「以管理员身份运行」，或使用安装包的提权启动方式。",

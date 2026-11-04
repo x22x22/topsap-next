@@ -123,7 +123,15 @@ pub async fn run<F: FnMut(&SelfTestStep)>(dll_path: &Path, on_step: F) -> SelfTe
     if !is_elevated().await {
         #[cfg(windows)]
         b.fail("管理员权限", "未提权，无法创建虚拟网卡；请以管理员身份运行");
-        #[cfg(unix)]
+        #[cfg(target_os = "linux")]
+        b.fail(
+            "管理员权限",
+            format!(
+                "当前未以 root 运行，无法创建 TUN 接口；请在终端执行 {} 启动应用",
+                super::unix::sudo_command()
+            ),
+        );
+        #[cfg(target_os = "macos")]
         b.fail(
             "管理员权限",
             "未提权，无法创建 TUN 接口；请重新启动并在系统授权框中允许管理员权限，或以 root/sudo 运行",

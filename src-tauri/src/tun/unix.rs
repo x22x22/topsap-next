@@ -25,6 +25,14 @@ pub struct TunDevice {
 unsafe impl Send for TunDevice {}
 unsafe impl Sync for TunDevice {}
 
+/// 以当前可执行文件生成 sudo 启动命令；仅 Linux 使用
+#[cfg(target_os = "linux")]
+pub(crate) fn sudo_command() -> String {
+    std::env::current_exe()
+        .map(|path| format!("sudo {}", path.display()))
+        .unwrap_or_else(|_| "sudo /usr/bin/topsap-client".to_string())
+}
+
 impl TunDevice {
     pub fn open(dll_path: &std::path::Path, name: &str) -> Result<Self, TunError> {
         Self::open_with(dll_path, name, None, None)

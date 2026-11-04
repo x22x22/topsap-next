@@ -351,10 +351,18 @@ const EN: Record<string, string> = {
     "TLS therefore cannot detect a man-in-the-middle. Use it only on trusted networks and verify the gateway address through another channel.",
   "当前未以 root 运行，无法创建 TUN 接口与注入路由。请在终端执行 sudo open \"/Applications/TopSAP Client.app\"，或直接使用 sudo 启动应用。":
     "The app is not running as root, so it cannot create a TUN interface or inject routes. Run sudo open \"/Applications/TopSAP Client.app\" or launch it with sudo.",
-  "当前未以 root 运行，无法创建 TUN 接口与注入路由。请使用 sudo 启动应用。":
-    "The app is not running as root, so it cannot create a TUN interface or inject routes. Launch it with sudo.",
+  "当前未以 root 运行，无法创建 TUN 接口与注入路由。请在终端执行 sudo /usr/bin/topsap-client 启动应用。":
+    "The app is not running as root, so it cannot create a TUN interface or inject routes. Start it from a terminal with sudo /usr/bin/topsap-client.",
   "当前未以管理员身份运行，创建虚拟网卡与注入路由会失败。请右键「以管理员身份运行」，或使用安装包的提权启动方式。":
     "The app is not running as administrator, so adapter creation and route injection will fail. Right-click and choose Run as administrator, or launch it from the installer.",
+  "需要 root 权限": "Root access required",
+  "Linux 版需要 root 权限才能创建 TUN 接口与修改路由":
+    "The Linux build needs root access to create the TUN interface and modify routes",
+  "当前以普通用户运行，创建 TUN 接口与修改路由会失败。请关闭窗口，在终端执行以下命令重新启动：":
+    "The app is running as a regular user, so creating the TUN interface and modifying routes will fail. Close the window and restart from a terminal with:",
+  "便携包请把路径替换为实际的 topsap-client 路径。":
+    "For the portable build, replace the path with the actual topsap-client path.",
+  "我知道了": "Got it",
   // 诊断
   "残留检查": "Residue check",
   "旧版本异常退出可能留下 hosts 标记段，检测到后可一键清理":

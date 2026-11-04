@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast, Toaster } from "sonner";
 
 import { AppShell, type PageId } from "./components/AppShell";
+import { Button, Modal } from "./components/ui";
 import { CaptchaDialog } from "./components/CaptchaDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { SmsDialog } from "./components/SmsDialog";
@@ -26,6 +27,7 @@ export default function App() {
   const engine = useEngineEvents();
   const [page, setPage] = useState<PageId>("connect");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [elevationNoticeOpen, setElevationNoticeOpen] = useState(true);
   const [summary, setSummary] = useState<SessionSummary | null>(null);
   const [resolvedTheme, setResolvedTheme] = useState<"dark" | "light">("dark");
   const [collapsed, setCollapsed] = useState(
@@ -43,6 +45,9 @@ export default function App() {
   });
 
   const themeMode = settingsQuery.data?.theme ?? "system";
+  const appInfo = infoQuery.data;
+  const needsRootNotice =
+    appInfo?.platform === "linux" && !appInfo.elevated && elevationNoticeOpen;
 
   const toggleCollapsed = useCallback(() => {
     setCollapsed((prev) => {
@@ -187,6 +192,32 @@ export default function App() {
           disconnect.mutate();
         }}
       />
+
+      <Modal
+        open={needsRootNotice}
+        title={t("需要 root 权限")}
+        description={t("Linux 版需要 root 权限才能创建 TUN 接口与修改路由")}
+        onClose={() => setElevationNoticeOpen(false)}
+        footer={
+          <Button variant="primary" onClick={() => setElevationNoticeOpen(false)}>
+            {t("我知道了")}
+          </Button>
+        }
+      >
+        <div className="space-y-3 text-xs leading-relaxed text-muted">
+          <p>
+            {t(
+              "当前以普通用户运行，创建 TUN 接口与修改路由会失败。请关闭窗口，在终端执行以下命令重新启动：",
+            )}
+          </p>
+          <pre className="overflow-x-auto rounded-xl border border-border bg-surface-2 px-3 py-2 text-[11px] text-text">
+            sudo /usr/bin/topsap-client
+          </pre>
+          <p className="text-[11px] text-faint">
+            {t("便携包请把路径替换为实际的 topsap-client 路径。")}
+          </p>
+        </div>
+      </Modal>
 
       <Toaster
         theme={resolvedTheme}

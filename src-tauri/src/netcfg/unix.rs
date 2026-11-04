@@ -80,8 +80,12 @@ impl NetConfig {
         tokio::time::sleep(Duration::from_millis(300)).await;
         let actual = self.interface_ipv4().await;
         if !actual.iter().any(|addr| addr == vip) {
+            #[cfg(target_os = "linux")]
+            let hint = "请以 root 运行（sudo /usr/bin/topsap-client）";
+            #[cfg(target_os = "macos")]
+            let hint = "请确认特权 helper 已安装，或以 root/sudo 运行";
             return Err(NetError::Interface(format!(
-                "配置网卡地址失败（当前：{}）；请确认特权 helper 已安装，或以 root/sudo 运行",
+                "配置网卡地址失败（当前：{}）；{hint}",
                 if actual.is_empty() {
                     "无地址".to_string()
                 } else {

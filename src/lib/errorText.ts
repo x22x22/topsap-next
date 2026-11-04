@@ -118,6 +118,8 @@ export function localizeError(message: string): string {
       "Wait for the current connection attempt to finish, or disconnect, before running the self-test."],
     [/^自检超时（45 秒），已中止；下次自检会先清理上次残留的虚拟网卡$/,
       "The self-test timed out after 45 seconds and was stopped; the next run will clean up the leftover adapter first."],
+    [/^配置网卡地址失败（当前：(.+)）；请以 root 运行（sudo \/usr\/bin\/topsap-client）$/,
+      "Failed to configure the adapter address (current: $1). Run the app as root with sudo /usr/bin/topsap-client."],
     [/^路由注入全部失败，内网流量无法进入隧道$/,
       "All route injections failed; intranet traffic cannot enter the tunnel."],
     [/^所有线路均不可用$/, "No line is available."],

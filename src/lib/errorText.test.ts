@@ -64,6 +64,16 @@ describe("localizeError", () => {
     );
   });
 
+  it("翻译 Linux 网卡配置权限错误", () => {
+    expect(
+      localizeError(
+        "配置网卡地址失败（当前：10.99.99.2）；请以 root 运行（sudo /usr/bin/topsap-client）",
+      ),
+    ).toBe(
+      "Failed to configure the adapter address (current: 10.99.99.2). Run the app as root with sudo /usr/bin/topsap-client.",
+    );
+  });
+
   it("翻译会话与连接状态错误", () => {
     expect(localizeError("已有连接操作正在进行，请稍候")).toBe(
       "A connection operation is already in progress. Please wait.",
