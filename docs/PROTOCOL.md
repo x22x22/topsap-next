@@ -21,8 +21,10 @@
 公共请求头：
 
 ```
-User-Agent: VONE-AUTH,WINDOWS,NULL,TOPCLINET,NULL,VERSION=3.6.6.19.64.1
+User-Agent: VONE-AUTH,WINDOWS,NULL,TOPCLINET,NULL
 ```
+
+> 官方客户端 3.6.6.19 会在末尾附加 `,VERSION=3.6.6.19.64.1`；该后缀未观察到参与登录校验，本客户端不发送，避免在 macOS/Linux 上声明为特定的 Windows 客户端版本。
 
 ### 2.1 能力探测
 

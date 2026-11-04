@@ -255,7 +255,7 @@ TopSAP-Next/
 | 修改密码 | `POST /vone/chg_pwd` | 已登录会话；请求体仅 `P1/P2`（原/新密码 Base64），Cookie 的 `sv_un` 为账号 Base64 并带 `seccheck=0` 与会话 ID；成功后按原客户端注销会话并清除本地记住的旧密码 |
 | 注销 | `POST /vone/login/logout` | Cookie 带 session_id |
 
-公共头：`User-Agent: VONE-AUTH,WINDOWS,NULL,TOPCLINET,NULL,VERSION=3.6.6.19.64.1`。
+公共头：`User-Agent: VONE-AUTH,WINDOWS,NULL,TOPCLINET,NULL`（官方客户端末尾还带 `VERSION` 后缀，该字段未观察到参与登录校验，本客户端不发送）。
 
 验证码策略取 `auth_param.gid`（`on`/`auto`/`off`）与 `login_check_verify`；`auto` 模式在 `login_err_num >= 3` 后要求图形验证码，失败次数按账号跨连接保留，与原客户端 Cookie 行为一致。
 

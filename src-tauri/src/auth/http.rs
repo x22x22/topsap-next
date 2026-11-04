@@ -13,8 +13,9 @@ use tokio_rustls::client::TlsStream;
 use super::error::AuthError;
 use crate::tls;
 
-/// 与官方客户端 3.6.6.19.64.1 保持一致；网关会按版本后缀选择账号/密码编码
-pub const USER_AGENT: &str = "VONE-AUTH,WINDOWS,NULL,TOPCLINET,NULL,VERSION=3.6.6.19.64.1";
+/// 官方客户端 3.6.6.19 会在末尾附加 VERSION 后缀；该字段未观察到参与登录校验，
+/// 本客户端不发送，避免在 macOS/Linux 上声明为特定的 Windows 客户端版本。
+pub const USER_AGENT: &str = "VONE-AUTH,WINDOWS,NULL,TOPCLINET,NULL";
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 
