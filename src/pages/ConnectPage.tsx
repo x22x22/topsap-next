@@ -440,7 +440,7 @@ export function ConnectPage({
               <div>
                 <div className="text-xs font-medium text-text">{t("记住密码")}</div>
                 <div className="text-[11px] text-faint">
-                  {t("保存到系统凭据管理器，不可用时回退为机器绑定加密文件")}
+                  {t("保存到系统安全存储，不可用时回退为机器绑定加密文件")}
                 </div>
               </div>
               <span onClick={(event) => event.stopPropagation()}>

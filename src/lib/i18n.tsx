@@ -105,8 +105,8 @@ const EN: Record<string, string> = {
   "密码": "Password",
   "登录密码": "Password",
   "记住密码": "Remember password",
-  "保存到系统凭据管理器，不可用时回退为机器绑定加密文件":
-    "Stored in the system credential manager; falls back to a machine-bound encrypted file",
+  "保存到系统安全存储，不可用时回退为机器绑定加密文件":
+    "Stored in the system secure storage; falls back to a machine-bound encrypted file",
   "忘记密码？": "Forgot password?",
   "请填写网关地址": "Enter the gateway address",
   "网关地址格式不正确": "Invalid gateway address",
