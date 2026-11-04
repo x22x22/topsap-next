@@ -9,7 +9,7 @@
 官方 TopSAP 客户端是一套 Electron 界面 + 常驻服务 + 内核驱动的组合，界面层问题较多。  
 TopSAP Client 用 Tauri 2 重写了整条链路：登录、隧道、虚拟网卡、路由与 DNS 配置全部在应用内完成。  
 下载一个安装包就能用，不附加常驻服务，不占用系统端口，行为可预期、可脚本化、有日志。  
-账号密码只保存在本机（系统凭据管理器优先），断开时按账本撤销全部系统改动。
+账号密码只保存在本机（系统安全存储优先：Windows 凭据管理器 / macOS 钥匙串 / Linux Secret Service），断开时按账本撤销全部系统改动。
 
 <p>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?labelColor=1f2937" alt="MIT License"></a>
@@ -52,9 +52,9 @@ TopSAP Client 用 Tauri 2 重写了整条链路：登录、隧道、虚拟网卡
 - **断开清理** — 路由、DNS、网卡会话按账本逆序撤销；正常退出、系统关机与终止信号下会限时尝试断开；强杀或断电留下的会话标记会在下次启动/连接前补注销。
 - **断线自动重连** — 隧道异常断开后按指数退避重试（最多 5 次），主动断开不触发；可在设置中关闭。
 - **已登录自动踢出** — 登录返回 `Ret=-40077` 时，按原客户端逻辑重新获取 `auth_param` 并调用 `user_pswd_r` 踢出上一次会话，成功后继续登录；无需重新输入账号密码，也不依赖本地会话标记。
-- **网卡自检** — 不接触网关，几秒内验证管理员权限、驱动加载、建卡、配址、回读、测试路由与双向收发，把「网卡层故障」和「协议层故障」分开定位。
+- **网卡自检** — 不接触网关，几秒内验证管理员权限、驱动加载、建卡、配址、回读、测试路由与双向收发，把「网卡层故障」和「协议层故障」分开定位；结束后自动清理测试网卡与路由。Linux 只删除带自检地址 `10.99.99.2` 的残留 `topsap0`，不会误删正在使用的连接网卡。
 - **残留检测** — 旧版本异常退出可能留下 hosts 标记段；启动后可在诊断页检测并一键清理。
-- **连接配置管理** — 保存多个网关配置（名称、连接模式、检测超时、地址列表），支持一条配置内多条线路；选中配置后隐藏网关与端口，支持自动选最快线路或连接前手动选路；可导入、导出、清空配置，并在设置窗口切换默认连接。
+- **连接配置管理** — 保存多个网关配置（名称、连接模式、检测超时、地址列表），支持一条配置内多条线路；选中配置后隐藏网关与端口，支持自动选最快线路或连接前手动选路；可导入、导出、清空配置，并在设置窗口切换默认连接。首次启动且没有任何导入配置、也没有保存过网关时，会提示前往「设置」-「连接管理」导入配置。
 - **多线路接入** — 单线路、多线路优选（并发探测选最快）、多线路备份（按顺序重试）三种模式。
 - **忘记密码** — 提交用户名与图形验证码；若网关要求二次验证，继续输入动态验证码并设置新密码，两步均复用同一次登录会话。账号不存在/被禁用与新密码不能与旧密码一致会给出明确提示。
 - **修改密码** — 连接成功后可在当前账号旁修改密码，需输入原密码、新密码与确认密码；登录返回密码到期/过弱/首登/管理员要求时，也会弹出无会话改密窗口。改密成功后自动注销，新密码自动填入登录框，重新登录提示会注明这一点。
@@ -62,7 +62,7 @@ TopSAP Client 用 Tauri 2 重写了整条链路：登录、隧道、虚拟网卡
 - **代理绕过** — 设置窗口可维护域名/泛域名/IP 绕过列表，默认写入 `*.sunline.cn` 与 `*.sunline-i.com`；Windows 使用 `ProxyOverride`，macOS 使用 `networksetup` 逐网络服务写入，Linux 使用 GNOME `gsettings ignore-hosts`。规则/全局系统代理模式下访问这些地址都不走代理；仅对使用系统代理的程序有效，TUN/透明代理模式无法覆盖。
 - **系统托盘与单实例** — 关闭窗口默认最小化到托盘，连接保持；重复启动不会产生第二个实例。
 - **中英文界面** — 顶栏一键切换中文 / English，语言偏好本地保存并支持跟随系统；设置窗口中的主题、语言与连接配置更改即时生效。
-- **记住密码** — 优先写入 Windows 凭据管理器；不可用时回退为机器标识派生密钥的 AES-256-GCM 文件。
+- **记住密码** — 优先写入系统安全存储（Windows 凭据管理器 / macOS 钥匙串 / Linux Secret Service）；不可用时回退为机器标识派生密钥的 AES-256-GCM 文件。
 - **深浅色主题与可折叠侧栏** — 顶栏一键切换深浅色（记忆偏好）；侧栏可收起为图标模式，操作提示统一以顶部 toast 展示。
 
 **它不是** VPN 网关、不是代理服务，也不绕过任何授权策略：TopSAP Client 只负责与**你自有的、已授权的**网关建立连接，访问控制仍由网关执行。
@@ -124,7 +124,7 @@ TopSAP Client 用 Tauri 2 重写了整条链路：登录、隧道、虚拟网卡
 本地开发需要 **Rust 1.77+** 与 **Node.js 20+**。运行支持 Windows 7 SP1 / 10 / 11（x64）、macOS（Intel / Apple 芯片）与 Linux（amd64 / arm64）。
 
 - **Windows**：使用 Wintun 虚拟网卡，安装包启动时请求管理员权限。
-- **macOS / Linux**：使用系统 TUN 设备，需要 root 权限才能创建接口、修改路由与 DNS。macOS 首次启动会弹出系统授权框安装 root LaunchDaemon helper；GUI 保持当前用户身份，自检与建卡通过 helper 完成。取消授权则自检与连接会提示 helper 不可用。Linux 使用 `sudo ./topsap-client`。
+- **macOS / Linux**：使用系统 TUN 设备，需要 root 权限才能创建接口、修改路由与 DNS。macOS 首次启动会弹出系统授权框安装 root LaunchDaemon helper；GUI 保持当前用户身份，自检与建卡通过 helper 完成。取消授权则自检与连接会提示 helper 不可用。Linux 使用 `sudo ./topsap-client`；以普通用户启动时会弹窗提示用 `sudo /usr/bin/topsap-client` 重新启动。
 
 ```bash
 git clone https://github.com/zyx3721/topsap-next.git
@@ -181,7 +181,7 @@ cargo test --lib                          # Rust 单元测试
 
 便携版解压后直接运行 `topsap-client.exe`，需保持 `resources\wintun.dll` 的相对位置不变，同样需要以管理员身份运行。
 
-> **macOS / Linux 用户**：应用需要 root 权限才能创建 TUN 接口与修改路由。macOS 首次启动会请求管理员授权并安装 root LaunchDaemon helper（`com.topsap.next.helper`），之后 GUI 以普通用户运行；也可以手动执行 `sudo open "/Applications/TopSAP Client.app"` 作为本地回退。Linux 直接 `sudo ./topsap-client`。macOS 应用未做 Apple 签名与公证，首次打开如提示「已损坏」，执行 `sudo xattr -rd com.apple.quarantine "/Applications/TopSAP Client.app"` 移除隔离属性。
+> **macOS / Linux 用户**：应用需要 root 权限才能创建 TUN 接口与修改路由。macOS 首次启动会请求管理员授权并安装 root LaunchDaemon helper（`com.topsap.next.helper`），之后 GUI 以普通用户运行；也可以手动执行 `sudo open "/Applications/TopSAP Client.app"` 作为本地回退。Linux 直接 `sudo ./topsap-client`；如果双击以普通用户启动，应用会弹窗提示改用 `sudo /usr/bin/topsap-client`。macOS 应用未做 Apple 签名与公证，首次打开如提示「已损坏」，执行 `sudo xattr -rd com.apple.quarantine "/Applications/TopSAP Client.app"` 移除隔离属性。
 
 ### 方式二：本地源码构建
 
@@ -195,8 +195,8 @@ npm run tauri build
 
 ## 使用说明
 
-1. **启动程序** — 安装版会自动请求 UAC；便携版需右键「以管理员身份运行」。
-2. **填写网关** — 输入网关地址与端口（例如 `vpn.example.com` / `8443`）、账号与密码；勾选「记住密码」可保存到系统凭据管理器。
+1. **启动程序** — 安装版会自动请求 UAC；便携版需右键「以管理员身份运行」。首次启动若没有任何导入配置、也没有保存过网关，会提示先到「设置」-「连接管理」导入配置。
+2. **填写网关** — 输入网关地址与端口（例如 `vpn.example.com` / `8443`）、账号与密码；勾选「记住密码」可保存到系统安全存储。
 3. **输入验证码** — 网关需要验证码时会弹窗，输入图中字符后确定；取消等同于取消本次登录。
 4. **输入动态验证码** — 部分用户组在密码校验后会收到短信或企业微信验证码（如「VPN登录验证码为：067143，有效期60秒」）。弹窗有效期与网关一致，可点「重新发送验证码」，输错可重试 3 次。
 5. **等待连接** — 状态依次经过探测、登录、创建网卡、建立隧道、注入路由；成功后显示虚拟 IP、路由数与实时流量。
@@ -211,7 +211,7 @@ npm run tauri build
 ```text
 安装即用，无需注册
         +
-密码存入系统凭据管理器，日志不含明文
+密码存入系统安全存储，日志不含明文
         +
 断开按账本撤销路由、DNS 与网卡
         +
@@ -221,8 +221,9 @@ npm run tauri build
 - **证书不校验（协议要求）** — 网关证书普遍自签或已过期，官方客户端也不校验；本客户端同样跳过证书链校验且不发送 SNI。这意味着 TLS 层无法识别中间人，**请仅在可信网络中使用**，并通过其他渠道核对网关地址。
 - **登录凭据以 Base64 编码后经 TLS 传输** — 网关要求 `U/P` 为账号与密码的 Base64；Base64 只是编码，安全边界完全依赖 TLS 通道。
 - **需要管理员权限** — 修改系统网络配置的前提，无法避免；程序只做路由、DNS 与虚拟网卡相关的改动。
-- **密码存储** — 优先写入 Windows 凭据管理器；不可用时回退为机器标识派生密钥的 AES-256-GCM 文件。密码、验证码、`session_id` 不写入日志与事件；异常退出会话标记只保存网关、端口与 `session_id`，同样使用机器绑定 AES-256-GCM 加密。
+- **密码存储** — 优先写入系统安全存储（Windows 凭据管理器 / macOS 钥匙串 / Linux Secret Service）；不可用时回退为机器标识派生密钥的 AES-256-GCM 文件。密码、验证码、`session_id` 不写入日志与事件；异常退出会话标记只保存网关、端口与 `session_id`，同样使用机器绑定 AES-256-GCM 加密。
 - **Windows 便携目录** — 配置、日志与 WebView2 数据都写在程序目录：`config\`（设置、连接配置、凭据回退文件、异常退出会话标记）、`data\logs\`（`client.log`）、`webview\`（WebView2 用户数据，运行时生成 `EBWebView`）。请把程序放在可写目录；升级或重装会沿用这些目录，如需彻底清除请手动删除。
+- **macOS / Linux 配置目录** — 设置、连接配置与凭据回退文件位于系统标准配置目录（Tauri `app_config_dir`），日志位于系统标准日志目录；使用 `sudo` 启动时以实际运行用户的 `$HOME` / `XDG_CONFIG_HOME` 为准。
 - **日志位置** — 程序目录 `data\logs\client.log`（2 MB 轮转，保留一份 `client.old.log`），设置窗口可一键打开。macOS / Linux 仍使用系统标准日志目录。
 - **残留清理** — 强杀或断电不会触发客户端清理，但 TUN 网卡与路由会随进程句柄关闭或系统重启回收；未完成注销的会话会加密记录，下次启动/连接前自动补注销，避免单点登录名额滞留。旧版本留下的 hosts 标记段仍可在诊断页清理。
 
@@ -262,7 +263,11 @@ npm run tauri build
 
 **macOS / Linux 怎么运行？**
 
-macOS 与 Linux 使用系统 TUN 设备，需要 root 权限创建接口与修改路由。macOS 首次启动会请求管理员授权并安装 root LaunchDaemon helper，GUI 保持用户身份；也可手动执行 `sudo open "/Applications/TopSAP Client.app"` 作为本地回退。Linux 执行 `sudo ./topsap-client`。Linux 需要 WebKitGTK 4.1 运行时（Ubuntu/Debian: `sudo apt-get install libwebkit2gtk-4.1-0`）。两者的数据面基于 TUN，不依赖 Wintun 驱动；当前版本已实现并纳入 CI 构建，尚未在真机完成完整连接回归。
+macOS 与 Linux 使用系统 TUN 设备，需要 root 权限创建接口与修改路由。macOS 首次启动会请求管理员授权并安装 root LaunchDaemon helper，GUI 保持用户身份；也可手动执行 `sudo open "/Applications/TopSAP Client.app"` 作为本地回退。Linux 执行 `sudo ./topsap-client`；如果双击以普通用户启动，应用会弹窗提示改用 `sudo /usr/bin/topsap-client`。Linux 需要 WebKitGTK 4.1 运行时（Ubuntu/Debian: `sudo apt-get install libwebkit2gtk-4.1-0`）。两者的数据面基于 TUN，不依赖 Wintun 驱动；当前版本已实现并纳入 CI 构建，尚未在真机完成完整连接回归。
+
+**Linux 连接时报 `Device or resource busy (os error 16)`？**
+
+说明 `topsap0` 已被一个仍存活的进程占用，通常是上一次自检或连接没有正常退出。先在托盘选择「退出」结束所有 TopSAP 实例；确认没有正在使用的连接后，执行 `sudo ip link del topsap0` 删除残留网卡，再重新连接。新版自检开始前会先清理带测试地址 `10.99.99.2` 的残留网卡。
 
 **能和官方客户端同时装吗？**
 

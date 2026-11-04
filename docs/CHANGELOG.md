@@ -2,6 +2,10 @@
 
 ## 未发布
 
+### 新增
+
+- 首次启动且没有任何连接配置时，提示前往「设置」-「连接管理」导入配置
+
 ### 修复
 
 - 登录、短信登录、改密与找回密码的账号/密码字段改为 Base64（对齐官方客户端 3.6.6.19）；无图形验证码时不再发送空 `Gid`，修复本地账号首次登录被网关误报 `-40081`、无法进入改密流程的问题
@@ -15,6 +19,12 @@
 - 找回密码成功提示补充「新密码已自动填入」，与登录框自动回填行为一致
 - 网卡自检：切换页面后保持运行与按钮旋转状态；每一步完成后立即展示；开始前清理上次残留的 `TopSAP` 虚拟网卡，修复 `Win32 1247` 与残留网卡；增加 45 秒超时保护与并发运行保护
 - macOS：路由改为 `route -n add -net <dest> -netmask <mask> <VIP>` 并回读接口；DNS 通过 `networksetup` 按「VPN DNS 在前、原 DNS 在后」写入当前网络服务，断开时恢复原列表或自动获取；helper 增加 `networksetup` 白名单并独立版本号以触发重装
+- Linux / macOS 自检：Unix TUN fd 改为非阻塞，读线程改为每轮 `poll` 后最多读取 32 个报文并用 `try_send` 投递；`reader.join()` 不再阻塞异步任务，45 秒超时恢复生效，自检结束能正常清理路由与网卡
+- Linux 自检残留：开始前仅删除带自检地址 `10.99.99.2` 的 `topsap0`，避免误删正在使用的连接网卡；自检运行中拒绝连接，连接流程中或存在待清理资源时拒绝自检
+- Linux TUN 错误提示：`EPERM/EACCES` 提示需要 root 并给出 `sudo <当前exe>` 命令；`EBUSY` 提示 `topsap0` 被占用并给出 `sudo ip link del topsap0`，不再混用同一条「特权 helper」提示
+- Linux 未提权启动：普通用户双击启动时弹窗提示改用 `sudo /usr/bin/topsap-client`；Linux 自检与网卡配置文案移除「系统授权框 / helper」，macOS 保持原提示
+- 记住密码：`keyring` 补齐 `apple-native`、`sync-secret-service` 与 `crypto-rust` 后端，修复 Linux / macOS 因退化为进程内 mock 导致「保存成功但重启读不到密码」的问题；CI 增加 `libdbus-1-dev` / `pkg-config`
+- 记住密码说明统一为「系统安全存储」，避免在 Linux / macOS 上仍显示「系统凭据管理器」
 
 ## 1.1.1
 

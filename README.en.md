@@ -9,7 +9,7 @@
 The official TopSAP client is a combination of an Electron UI, a resident service and a kernel driver — and its UI layer is the fragile part.  
 TopSAP Client rewrites the whole chain with Tauri 2: login, tunnel, virtual adapter, routing and DNS all live inside the app.  
 One installer is all it takes — no extra resident service, no listening ports, predictable behaviour, scriptable, with logs.  
-Credentials stay on your machine (system credential manager first), and disconnecting rolls back every system change from a ledger.
+Credentials stay on your machine (system secure storage first: Windows Credential Manager / macOS Keychain / Linux Secret Service), and disconnecting rolls back every system change from a ledger.
 
 <p>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?labelColor=1f2937" alt="MIT License"></a>
@@ -52,9 +52,9 @@ Credentials stay on your machine (system credential manager first), and disconne
 - **Clean disconnect** — Routes, DNS and the adapter session are rolled back in reverse order from a ledger; normal quit, system shutdown and termination signals attempt a bounded disconnect; sessions left by a forced kill or power loss are logged out on the next launch/connect.
 - **Auto reconnect** — Exponential backoff (up to 5 attempts) when the tunnel drops unexpectedly; manual disconnects never trigger it, and it can be disabled in settings.
 - **Automatic kick-out** — When login returns `Ret=-40077`, the app follows the official flow: re-fetch `auth_param`, call `user_pswd_r` to kick the previous session, and continue logging in without re-entering credentials or relying on a local session marker.
-- **Adapter self-test** — Without touching the gateway, verifies admin rights, driver loading, adapter creation, address assignment, read-back, test route and bidirectional packet flow in seconds — separating adapter faults from protocol faults.
+- **Adapter self-test** — Without touching the gateway, verifies admin rights, driver loading, adapter creation, address assignment, read-back, test route and bidirectional packet flow in seconds — separating adapter faults from protocol faults. The test adapter and routes are cleaned up afterwards; on Linux only a leftover `topsap0` carrying the test address `10.99.99.2` is removed, so an in-use connection adapter is never deleted.
 - **Residue detection** — Older versions could leave a hosts block after an abrupt exit; the Diagnostics page can detect and remove it in one click.
-- **Connection profiles** — Save multiple gateway profiles (name, connection mode, probe timeout, address list), with several lines per profile; selecting a profile hides the gateway and port, and multi-line profiles can auto-pick the fastest line or show a latency-sorted picker before connecting. Import, export or clear profiles from the Settings window.
+- **Connection profiles** — Save multiple gateway profiles (name, connection mode, probe timeout, address list), with several lines per profile; selecting a profile hides the gateway and port, and multi-line profiles can auto-pick the fastest line or show a latency-sorted picker before connecting. Import, export or clear profiles from the Settings window. When the app starts with no profiles and no saved gateway, it prompts you to import one in Settings > Connection profiles.
 - **Multi-line access** — Single line, multi-line preferred (probe all lines concurrently and pick the fastest) and multi-line backup (try in order).
 - **Forgot password** — Submit a username and image captcha; when the gateway requires a second step, enter the one-time code and set a new password within the same session. Missing/disabled accounts and reuse of the old password get explicit messages.
 - **Change password** — While connected, change the current account password with the old password, new password and confirmation. If login returns expired/weak/first-login/admin-required password status, a standalone change-password dialog is shown. After a successful change the session is logged out, the new password is filled into the login form, and the next successful login toast says so.
@@ -62,7 +62,7 @@ Credentials stay on your machine (system credential manager first), and disconne
 - **Proxy bypass** — The settings window manages a domain/wildcard/IP bypass list, preloaded with `*.sunline.cn` and `*.sunline-i.com`. Windows uses `ProxyOverride`, macOS writes per-service lists through `networksetup`, and Linux uses GNOME `gsettings ignore-hosts`. Entries bypass the local proxy in both rule and global system-proxy modes. Only apps that use the system proxy are affected; TUN/transparent proxies are not covered.
 - **Tray and single instance** — Closing the window minimizes to tray by default and keeps the connection; launching again never creates a second instance.
 - **Chinese / English UI** — Toggle languages from the header; the choice is saved locally and can follow the system. Theme, language and profile changes apply immediately in the Settings window.
-- **Remember password** — Stored in the Windows Credential Manager first; falls back to a machine-bound AES-256-GCM file.
+- **Remember password** — Stored in system secure storage first (Windows Credential Manager / macOS Keychain / Linux Secret Service); falls back to a machine-bound AES-256-GCM file.
 - **Light/dark theme and collapsible sidebar** — Toggle themes from the header (preference remembered); collapse the sidebar to icons, with all notices shown as top toasts.
 
 **It is not** a VPN gateway, a proxy service, or a way to bypass authorization: TopSAP Client only connects to gateways **you own and are authorized to use**, and access control remains enforced by the gateway.
@@ -124,7 +124,7 @@ See [docs/PROTOCOL.md](docs/PROTOCOL.md) for the full protocol and [docs/ARCHITE
 Local development requires **Rust 1.77+** and **Node.js 20+**. Runtime support covers Windows 7 SP1 / 10 / 11 (x64), macOS (Intel / Apple silicon) and Linux (amd64 / arm64).
 
 - **Windows**: uses the Wintun virtual adapter; the installer requests administrator rights on launch.
-- **macOS / Linux**: uses the system TUN device and needs root privileges to create the interface and edit routes/DNS. On macOS the first launch installs a root LaunchDaemon helper after administrator authorization; the GUI stays user-level and uses the helper for the self-test and adapter creation. Cancelling leaves the self-test and connection reporting that the helper is unavailable. On Linux run `sudo ./topsap-client`.
+- **macOS / Linux**: uses the system TUN device and needs root privileges to create the interface and edit routes/DNS. On macOS the first launch installs a root LaunchDaemon helper after administrator authorization; the GUI stays user-level and uses the helper for the self-test and adapter creation. Cancelling leaves the self-test and connection reporting that the helper is unavailable. On Linux run `sudo ./topsap-client`; launching as a regular user shows a dialog telling you to restart with `sudo /usr/bin/topsap-client`.
 
 ```bash
 git clone https://github.com/zyx3721/topsap-next.git
@@ -181,7 +181,7 @@ The installer requests administrator rights on launch (creating the virtual adap
 
 The portable build runs `topsap-client.exe` directly; keep `resources\wintun.dll` at its relative path, and run it as administrator as well.
 
-> **macOS / Linux users**: the app needs root privileges to create the TUN interface and edit routes. On macOS the first launch requests administrator authorization and installs a root LaunchDaemon helper (`com.topsap.next.helper`); afterwards the GUI runs as the current user. You can also run `sudo open "/Applications/TopSAP Client.app"` as a local fallback. On Linux run `sudo ./topsap-client`. The macOS app is not signed or notarized by Apple — if macOS reports it as damaged on first launch, run `sudo xattr -rd com.apple.quarantine "/Applications/TopSAP Client.app"` to remove the quarantine attribute.
+> **macOS / Linux users**: the app needs root privileges to create the TUN interface and edit routes. On macOS the first launch requests administrator authorization and installs a root LaunchDaemon helper (`com.topsap.next.helper`); afterwards the GUI runs as the current user. You can also run `sudo open "/Applications/TopSAP Client.app"` as a local fallback. On Linux run `sudo ./topsap-client`; if you launch it as a regular user by double-clicking, the app tells you to use `sudo /usr/bin/topsap-client`. The macOS app is not signed or notarized by Apple — if macOS reports it as damaged on first launch, run `sudo xattr -rd com.apple.quarantine "/Applications/TopSAP Client.app"` to remove the quarantine attribute.
 
 ### Option 2: Build from source
 
@@ -195,8 +195,8 @@ Artifacts land in `src-tauri/target/release/bundle/nsis/`. The main binary manif
 
 ## Usage
 
-1. **Launch** — The installer build prompts for UAC; for the portable build, right-click and run as administrator.
-2. **Fill in the gateway** — Enter address and port (e.g. `vpn.example.com` / `8443`), username and password; enable "Remember password" to store it in the system credential manager.
+1. **Launch** — The installer build prompts for UAC; for the portable build, right-click and run as administrator. If the app starts with no profiles and no saved gateway, it prompts you to import one in Settings > Connection profiles.
+2. **Fill in the gateway** — Enter address and port (e.g. `vpn.example.com` / `8443`), username and password; enable "Remember password" to store it in system secure storage.
 3. **Enter the captcha** — A dialog appears when the gateway requires one; cancelling is treated as cancelling the login.
 4. **Enter the one-time code** — Some user groups receive an SMS or WeCom code after the password check (e.g. "VPN login code: 067143, valid for 60 seconds"). The dialog follows the gateway validity window, offers resend and allows up to 3 attempts.
 5. **Wait for connection** — States go through probing, login, adapter creation, tunnel handshake and route injection; the app then shows the virtual IP, route count and live traffic.
@@ -211,7 +211,7 @@ Artifacts land in `src-tauri/target/release/bundle/nsis/`. The main binary manif
 ```text
 Install and use — no sign-up
         +
-Passwords in the system credential manager, never in logs
+Passwords in system secure storage, never in logs
         +
 Disconnect rolls back routes, DNS and the adapter from a ledger
         +
@@ -221,8 +221,9 @@ Frontend and backend talk over Tauri IPC — no TCP ports listened on
 - **Certificate validation is skipped (protocol requirement)** — Gateway certificates are usually self-signed or expired, and the official client does not validate them either; this client also skips chain validation and sends no SNI. That means TLS cannot identify a man-in-the-middle — **use it only on trusted networks** and verify the gateway address through another channel.
 - **Credentials are Base64-encoded inside TLS** — The gateway expects `U/P` as Base64 of the username and password; Base64 is only an encoding, and the security boundary is the TLS channel itself.
 - **Administrator rights are required** — Unavoidable for changing system network configuration; the app only touches routes, DNS and the virtual adapter.
-- **Password storage** — Windows Credential Manager first; falls back to a machine-bound AES-256-GCM file. Passwords, captchas and `session_id` never enter logs or events; the abnormal-exit session marker stores only the gateway, port and `session_id`, encrypted with the same machine-bound AES-256-GCM key.
+- **Password storage** — Stored in system secure storage first (Windows Credential Manager / macOS Keychain / Linux Secret Service); falls back to a machine-bound AES-256-GCM file. Passwords, captchas and `session_id` never enter logs or events; the abnormal-exit session marker stores only the gateway, port and `session_id`, encrypted with the same machine-bound AES-256-GCM key.
 - **Portable layout on Windows** — Settings, logs and WebView2 data live next to the executable: `config\` (settings, connection profiles, credential fallback, abnormal-exit session marker), `data\logs\` (`client.log`) and `webview\` (WebView2 user data, containing `EBWebView`). Keep the app in a writable folder; upgrades and reinstalls reuse these directories, so delete them manually for a full cleanup.
+- **Configuration directories on macOS / Linux** — Settings, connection profiles and the credential fallback live in the standard system configuration directory (Tauri `app_config_dir`), with logs in the standard system log directory; under `sudo` the actual `$HOME` / `XDG_CONFIG_HOME` of the runtime user determines the path.
 - **Log location** — `data\logs\client.log` next to the executable (2 MB rotation, one `client.old.log` kept); open it from the Settings window. macOS and Linux keep using the standard system log directory.
 - **Residue cleanup** — A forced kill or power loss skips client-side cleanup, but the TUN adapter and routes are released when the process handles close or the system reboots; an unfinished logout is recorded encrypted and retried on the next launch/connect so the SSO slot is not left occupied. Legacy hosts blocks can still be removed on the Diagnostics page.
 
@@ -262,7 +263,11 @@ Yes. On startup the app reads the real OS version through `RtlGetVersion`; versi
 
 **How do I run it on macOS / Linux?**
 
-macOS and Linux use the system TUN device and need root privileges to create the interface and edit routes. On macOS the first launch requests administrator authorization and installs a root LaunchDaemon helper; the GUI stays user-level. You can also run `sudo open "/Applications/TopSAP Client.app"` as a local fallback. On Linux run `sudo ./topsap-client`. Linux needs the WebKitGTK 4.1 runtime (`sudo apt-get install libwebkitgtk-4.1-0` on Ubuntu/Debian). Both platforms use a TUN-based data plane instead of Wintun; the implementation is in place and built by CI, but a full connection regression on real hardware is still pending.
+macOS and Linux use the system TUN device and need root privileges to create the interface and edit routes. On macOS the first launch requests administrator authorization and installs a root LaunchDaemon helper; the GUI stays user-level. You can also run `sudo open "/Applications/TopSAP Client.app"` as a local fallback. On Linux run `sudo ./topsap-client`; if you double-click it as a regular user, the app prompts you to restart with `sudo /usr/bin/topsap-client`. Linux needs the WebKitGTK 4.1 runtime (`sudo apt-get install libwebkit2gtk-4.1-0` on Ubuntu/Debian). Both platforms use a TUN-based data plane instead of Wintun; the implementation is in place and built by CI, but a full connection regression on real hardware is still pending.
+
+**Linux reports `Device or resource busy (os error 16)`?**
+
+`topsap0` is still held by a live process, usually a self-test or connection that did not exit cleanly. Quit every TopSAP instance from the tray menu first; after confirming no connection is using the adapter, run `sudo ip link del topsap0` and reconnect. The current self-test removes a leftover adapter only when it carries the test address `10.99.99.2`.
 
 **Can it coexist with the official client?**
 

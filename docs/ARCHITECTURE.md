@@ -218,13 +218,13 @@ TopSAP-Next/
 │       ├── privileged.rs        # macOS helper 客户端与 LaunchDaemon 安装
 │       ├── session_guard.rs     # 异常退出会话标记与下次启动补注销
 │       ├── shutdown.rs          # 系统关机/终止信号下的限时断开
-│       ├── auth/{mod,client,error,parser}.rs
-│       ├── protocol/{mod,frame,consts}.rs
-│       ├── tunnel/{mod,client,verifier}.rs
-│       ├── tun/{mod,ffi,device,selftest}.rs
-│       ├── netcfg/{mod,routes,hosts,dns,shell}.rs
-│       ├── session/{mod,engine,state,events}.rs
-│       └── commands/{mod,app,conn,diag,settings}.rs
+│       ├── auth/{mod,client,error,http,json,model}.rs
+│       ├── protocol/{mod,frame,parser}.rs
+│       ├── tunnel/mod.rs
+│       ├── tun/{mod,ffi,device,unix,selftest}.rs
+│       ├── netcfg/{mod,routes,hosts,shell,unix,windows}.rs
+│       ├── session/{mod,engine,state}.rs
+│       └── commands/{mod,app,conn,diag,profiles,settings}.rs
 ├── docs/
 │   ├── ARCHITECTURE.md
 │   └── PROTOCOL.md
@@ -292,6 +292,9 @@ TLS 建连（不校验证书、不发 SNI）
 ### 6.3 网络配置
 
 - 网卡：Windows 使用 Wintun（`TopSAP`，固定 GUID）；macOS 使用系统 utun；Linux 使用 `/dev/net/tun`；MTU 1400
+- Unix TUN：fd 创建后统一设为非阻塞，读循环用 `poll` 等待可读，读到 `EAGAIN` 即返回；避免阻塞 `read` 让自检读线程、断开流程或 45 秒超时失效
+- Linux 自检残留：开始前检查 `topsap0`，仅当接口带有自检地址 `10.99.99.2` 时才执行 `ip link del`，避免误删正在使用的连接网卡；测试路由随接口删除或由账本清理
+- 自检与连接互斥：连接流程中或存在待清理资源时拒绝自检；自检运行中拒绝连接，避免两者争用同名 `topsap0`
 - 地址：`net_param.vip_v4` / `vip_mask`
 - 路由：按 ACL 目标网段与资源 `ip/mask` 并集生成；ACL 目标优先非零 `d_ip_v4`，否则取 `d_ip_v6`；`route_list` 不使用；网关 IP 必须加旁路路由；macOS 使用 `route -n add -net <dest> -netmask <mask> <VIP>`，Linux 使用 `ip route add <dest>/<prefix> dev <ifname>`
 - 内网域名：解析 `dns_info.dns_list` 后仅保留在会话数据中，不修改系统 hosts（与原客户端一致）；`hosts` 模块保留用于清理旧版本残留
@@ -308,13 +311,13 @@ TLS 建连（不校验证书、不发 SNI）
 | `auth` | HTTP 登录三步骤、伪 JSON 解析、错误码映射 | `AuthClient`, `LoginConfig`, `AuthError` |
 | `protocol` | 帧编解码、流式拆帧、常量 | `Frame`, `FrameEncoder`, `FrameParser` |
 | `tunnel` | TLS 长连接、握手状态机、上下行计数 | `Tunnel`, `TunnelEvent`, `NoVerifyVerifier` |
-| `tun` | wintun FFI 绑定、读循环、写包、自检 | `WintunApi`, `TunDevice`, `SelfTestReport` |
+| `tun` | wintun FFI 绑定、Unix 非阻塞 TUN、读循环、写包、自检与残留清理 | `WintunApi`, `TunDevice`, `SelfTestReport` |
 | `netcfg` | 网卡地址、路由注入/回读、DNS、旧版 hosts 残留清理 | `NetConfig`, `RouteEntry`, `CleanupLedger` |
 | `session` | 生命周期编排、事件广播、自动重连 | `Engine`, `EngineState`, `EngineEvent` |
 | `platform` | 运行环境探测，区分 Windows 7 与较新系统 | `is_windows7()` |
 | `settings` | 应用设置读写与校验 | `AppSettings` |
 | `proxy_bypass` | Windows / macOS / Linux 系统代理绕过列表同步 | `ProxyBypassStatus` |
-| `secret_store` | keyring 优先 + AES-GCM 回退 | `SecretStore` |
+| `secret_store` | 跨平台 keyring（Windows 凭据管理器 / macOS 钥匙串 / Linux Secret Service）+ AES-GCM 回退 | `SecretStore` |
 | `helper` | macOS root LaunchDaemon：创建 utun、执行 ifconfig/route 白名单命令 | `helper::run()` |
 | `privileged` | macOS helper 客户端、LaunchDaemon 安装与版本探活 | `ensure_helper()`, `create_tun()`, `run()` |
 | `session_guard` | 异常退出会话标记、启动/连接前补注销 | `PendingSession`, `purge()` |
@@ -432,6 +435,17 @@ flowchart TD
 
 helper 安装使用 root LaunchDaemon 而非 `SMJobBless`，因此不要求 Apple 开发者签名；代价是首次安装需要一次管理员授权，且多用户机器上 helper 按首次安装的 uid 服务。
 
+### 7.8 Linux 提权模型
+
+Linux 不安装特权 helper，`is_elevated()` 直接判断 `geteuid() == 0`：
+
+- 普通用户双击启动时无法通过 `TUNSETIFF`（需要 `CAP_NET_ADMIN`），后续 `ip addr` / `ip route` 也会失败；
+- GUI 启动时检测到非 root 只弹出明确提示，要求改用 `sudo /usr/bin/topsap-client` 重新启动；自检第一步给出同样的命令，不再引用 macOS 才有的「系统授权框 / helper」；
+- 仅给二进制 `setcap cap_net_admin+ep` 不足以解决问题：fork 出的 `ip` 子进程没有该 capability，且 `is_elevated()` 仍会判定为未提权；
+- `EPERM` 与 `EBUSY` 分开映射：前者提示需要 root，后者提示同名 `topsap0` 被占用并给出清理命令。
+
+完整的 polkit / root helper 方案（GUI 保持普通用户）仍属于后续改造项。
+
 ---
 
 ## 8. 前端设计
@@ -468,6 +482,7 @@ helper 安装使用 root LaunchDaemon 而非 `SMJobBless`，因此不要求 Appl
 - 设置以窗口形式打开：左侧子菜单（通用 / 连接管理 / 代理绕过 / 外观 / 关于），右侧内容区；所有开关、主题、语言与连接配置更改即时生效，无需保存按钮
 - 代理绕过：设置窗口维护域名/泛域名/IP 列表，默认 `*.sunline.cn` 与 `*.sunline-i.com`；Windows 写 `ProxyOverride`，macOS 写 `networksetup` 逐网络服务列表，Linux 写 GNOME `gsettings ignore-hosts`；启动时重新应用，关闭只移除本应用写入的条目
 - 中英文切换：`lib/i18n.tsx` 以中文原文为 key、英文缺失回退中文，语言偏好写入 localStorage
+- 启动提示：Linux 非 root 时提示用 `sudo` 重新启动；没有任何导入配置且未保存网关时提示前往「设置」-「连接管理」导入；两者均为可关闭的 Modal，root 提示优先
 - 连接配置选中后隐藏网关地址与端口；多线路优选可勾选「自动选择线路」，未勾选时连接前弹出按延迟排序的线路选择
 - 下拉框使用自绘 `Select` 组件，展开时箭头旋转，菜单跟随主题样式
 - 连接成功后显示当前账号与「修改密码」入口，原密码、新密码、确认密码三项校验后提交；改密成功后自动注销并在重新登录时提示「登录密码已自动填入」
@@ -506,14 +521,16 @@ export const api = {
 
 | 项 | 措施 |
 | --- | --- |
-| 密码落盘 | keyring（Windows 凭据管理器）；失败回退 AES-256-GCM + 机器标识派生密钥 |
+| 密码落盘 | keyring（Windows 凭据管理器 / macOS 钥匙串 / Linux Secret Service）；失败回退 AES-256-GCM + 机器标识派生密钥 |
 | 会话标记 | 仅保存网关、端口与 `session_id`；AES-256-GCM + 机器绑定密钥，Unix 权限 0600，超过 24 小时不再重试 |
 | 存储位置 | Windows 便携布局：`<exe>/config`、`<exe>/data/logs`、`<exe>/webview`；macOS/Linux 使用系统标准目录 |
 | 日志脱敏 | 密码、验证码、session_id、SPA key 一律不进日志 |
 | CSP | 生产禁用 `unsafe-eval`，仅允许自身资源与 `data:` 图片 |
 | IPC | 命令白名单，无通用文件/进程执行命令 |
-| 提权 | 进程级 `requireAdministrator`，不做运行时 UAC 提升 |
+| 提权 | Windows 进程级 `requireAdministrator`；macOS 使用 root helper；Linux 需要 `sudo` 启动（非 root 时弹窗提示） |
 | 证书 | 不校验（协议要求），UI 常驻风险提示，README 显著说明 |
+
+> `keyring` 必须同时启用 `windows-native`、`apple-native` 与 `sync-secret-service`。缺少目标平台后端 feature 时，keyring 会退化为进程内 mock，表现为「保存成功但重启后读不到密码」；Linux 构建还需要 `libdbus-1-dev` / `pkg-config`。
 
 ---
 
