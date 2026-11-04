@@ -1157,10 +1157,7 @@ impl Engine {
             let session = { self.lock().session.clone() };
             let Some(session) = session else { return };
 
-            self.log(format!(
-                "第 {attempt}/{MAX_RECONNECT} 次重连尝试（等待 {} 秒）",
-                wait.as_secs()
-            ));
+            self.log(format!("第 {attempt}/{MAX_RECONNECT} 次重连尝试"));
 
             match self.reopen_tunnel(&session, &cancel).await {
                 Ok(()) => {
