@@ -13,17 +13,25 @@ use super::{hosts, shell, NetError, RouteReport};
 enum LedgerEntry {
     Route {
         dest: String,
+        mask: String,
         prefix: u8,
         preexisting: bool,
     },
     Bypass {
         ip: String,
     },
+    #[cfg(target_os = "macos")]
+    Dns {
+        service: String,
+        original: Vec<String>,
+    },
 }
 
 pub struct NetConfig {
     ifname: String,
     ledger: Vec<LedgerEntry>,
+    #[cfg(target_os = "macos")]
+    vip: Option<String>,
 }
 
 impl NetConfig {
@@ -31,6 +39,8 @@ impl NetConfig {
         Self {
             ifname: alias.into(),
             ledger: Vec::new(),
+            #[cfg(target_os = "macos")]
+            vip: None,
         }
     }
 
@@ -46,12 +56,11 @@ impl NetConfig {
     }
 
     pub async fn configure_interface(&mut self, vip: &str, mask: &str) -> Result<u32, NetError> {
-        let prefix = crate::auth::model::mask_to_prefix(mask)
-            .ok_or_else(|| NetError::Interface(format!("掩码「{mask}」不是合法的连续掩码")))?;
-        let cidr = format!("{vip}/{prefix}");
-
         #[cfg(target_os = "linux")]
         {
+            let prefix = crate::auth::model::mask_to_prefix(mask)
+                .ok_or_else(|| NetError::Interface(format!("掩码「{mask}」不是合法的连续掩码")))?;
+            let cidr = format!("{vip}/{prefix}");
             let _ = shell::run("ip", &["link", "set", "dev", &self.ifname, "up"]).await;
             let _ = shell::run("ip", &["addr", "add", &cidr, "dev", &self.ifname]).await;
             let _ = shell::run("ip", &["link", "set", "dev", &self.ifname, "mtu", "1400"]).await;
@@ -65,6 +74,7 @@ impl NetConfig {
             )
             .await;
             let _ = shell::run("ifconfig", &[&self.ifname, "mtu", "1400"]).await;
+            self.vip = Some(vip.to_string());
         }
 
         tokio::time::sleep(Duration::from_millis(300)).await;
@@ -83,12 +93,12 @@ impl NetConfig {
     }
 
     pub async fn bypass_gateway(&mut self, gateway_ip: &str) -> bool {
-        if self.has_route(gateway_ip, 32).await {
-            return true;
-        }
         let Some(gateway) = self.default_gateway().await else {
             return false;
         };
+        if self.route_ok(gateway_ip, 32, Some(&gateway)).await {
+            return true;
+        }
 
         #[cfg(target_os = "linux")]
         let out = shell::run(
@@ -99,7 +109,7 @@ impl NetConfig {
         #[cfg(target_os = "macos")]
         let out = shell::run("route", &["-n", "add", "-host", gateway_ip, &gateway]).await;
 
-        if out.ok || self.has_route(gateway_ip, 32).await {
+        if out.ok || self.route_ok(gateway_ip, 32, Some(&gateway)).await {
             self.ledger.push(LedgerEntry::Bypass {
                 ip: gateway_ip.to_string(),
             });
@@ -117,6 +127,7 @@ impl NetConfig {
             if self.has_route(&route.dest, route.prefix).await {
                 self.ledger.push(LedgerEntry::Route {
                     dest: route.dest.clone(),
+                    mask: route.mask.clone(),
                     prefix: route.prefix,
                     preexisting: true,
                 });
@@ -129,15 +140,44 @@ impl NetConfig {
             #[cfg(target_os = "linux")]
             let out = shell::run("ip", &["route", "add", &target, "dev", &self.ifname]).await;
             #[cfg(target_os = "macos")]
-            let out = shell::run(
-                "route",
-                &["-n", "add", "-net", &target, "-interface", &self.ifname],
-            )
-            .await;
+            let out = match self.vip.as_deref() {
+                Some(vip) => {
+                    shell::run(
+                        "route",
+                        &[
+                            "-n",
+                            "add",
+                            "-net",
+                            &route.dest,
+                            "-netmask",
+                            &route.mask,
+                            vip,
+                        ],
+                    )
+                    .await
+                }
+                None => {
+                    shell::run(
+                        "route",
+                        &[
+                            "-n",
+                            "add",
+                            "-net",
+                            &route.dest,
+                            "-netmask",
+                            &route.mask,
+                            "-interface",
+                            &self.ifname,
+                        ],
+                    )
+                    .await
+                }
+            };
 
             if out.ok && self.has_route(&route.dest, route.prefix).await {
                 self.ledger.push(LedgerEntry::Route {
                     dest: route.dest.clone(),
+                    mask: route.mask.clone(),
                     prefix: route.prefix,
                     preexisting: false,
                 });
@@ -154,9 +194,80 @@ impl NetConfig {
         }
     }
 
-    pub async fn set_dns(&mut self, _dns1: &str) -> bool {
-        // Unix 不修改全局 DNS：内网域名仅解析保留，系统解析器保持原样
-        false
+    pub async fn set_dns(&mut self, dns1: &str, dns2: &str) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            let Some(service) = self.active_service().await else {
+                return false;
+            };
+            let original = self.read_dns(&service).await;
+            let mut servers: Vec<String> = [dns1, dns2]
+                .into_iter()
+                .filter(|value| !value.is_empty() && *value != "0.0.0.0")
+                .map(str::to_string)
+                .collect();
+            if servers.is_empty() {
+                return false;
+            }
+            servers.extend(original.iter().cloned());
+            let mut args: Vec<String> = vec!["setdnsservers".to_string(), service.clone()];
+            args.extend(servers);
+            let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+            let out = shell::run("networksetup", &refs).await;
+            if out.ok {
+                self.ledger.push(LedgerEntry::Dns { service, original });
+                true
+            } else {
+                false
+            }
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let _ = (dns1, dns2);
+            // Linux 不修改全局 DNS：内网域名仅解析保留，系统解析器保持原样
+            false
+        }
+    }
+
+    /// 找到当前默认路由对应的网络服务（Wi-Fi / Ethernet 等）
+    #[cfg(target_os = "macos")]
+    async fn active_service(&self) -> Option<String> {
+        let default_if = self.default_interface().await;
+        let out = shell::run("networksetup", &["-listnetworkserviceorder"]).await;
+        if out.ok {
+            if let Some(ifname) = default_if.as_deref() {
+                if let Some(service) = parse_network_service_order(&out.stdout, ifname) {
+                    return Some(service);
+                }
+            }
+        }
+        for candidate in ["Wi-Fi", "Ethernet"] {
+            let out = shell::run("networksetup", &["-getinfo", candidate]).await;
+            if out.ok {
+                return Some(candidate.to_string());
+            }
+        }
+        None
+    }
+
+    #[cfg(target_os = "macos")]
+    async fn default_interface(&self) -> Option<String> {
+        let out = shell::run("route", &["-n", "get", "default"]).await;
+        out.stdout.lines().find_map(|line| {
+            line.trim()
+                .strip_prefix("interface:")
+                .map(|value| value.trim().to_string())
+        })
+    }
+
+    /// 读取网络服务当前的 DNS；自动获取时返回空列表
+    #[cfg(target_os = "macos")]
+    async fn read_dns(&self, service: &str) -> Vec<String> {
+        let out = shell::run("networksetup", &["-getdnsservers", service]).await;
+        if !out.ok {
+            return Vec::new();
+        }
+        parse_dns_servers(&out.stdout)
     }
 
     pub async fn cleanup(&mut self) {
@@ -164,23 +275,54 @@ impl NetConfig {
             match entry {
                 LedgerEntry::Route {
                     dest,
+                    mask,
                     prefix,
                     preexisting,
                 } => {
                     if preexisting {
                         continue;
                     }
-                    let target = format!("{dest}/{prefix}");
                     #[cfg(target_os = "linux")]
-                    let _ = shell::run("ip", &["route", "del", &target, "dev", &self.ifname]).await;
+                    {
+                        let _ = &mask;
+                        let target = format!("{dest}/{prefix}");
+                        let _ =
+                            shell::run("ip", &["route", "del", &target, "dev", &self.ifname]).await;
+                    }
                     #[cfg(target_os = "macos")]
-                    let _ = shell::run("route", &["-n", "delete", "-net", &target]).await;
+                    {
+                        let _ = prefix;
+                        let _ = shell::run(
+                            "route",
+                            &[
+                                "-n",
+                                "delete",
+                                "-net",
+                                &dest,
+                                "-netmask",
+                                &mask,
+                                "-interface",
+                                &self.ifname,
+                            ],
+                        )
+                        .await;
+                    }
                 }
                 LedgerEntry::Bypass { ip } => {
                     #[cfg(target_os = "linux")]
                     let _ = shell::run("ip", &["route", "del", &format!("{ip}/32")]).await;
                     #[cfg(target_os = "macos")]
                     let _ = shell::run("route", &["-n", "delete", "-host", &ip]).await;
+                }
+                #[cfg(target_os = "macos")]
+                LedgerEntry::Dns { service, original } => {
+                    let mut args: Vec<&str> = vec!["setdnsservers", service.as_str()];
+                    if original.is_empty() {
+                        args.push("Empty");
+                    } else {
+                        args.extend(original.iter().map(String::as_str));
+                    }
+                    let _ = shell::run("networksetup", &args).await;
                 }
             }
         }
@@ -196,16 +338,48 @@ impl NetConfig {
     }
 
     async fn has_route(&self, dest: &str, prefix: u8) -> bool {
-        let target = format!("{dest}/{prefix}");
         #[cfg(target_os = "linux")]
         {
+            let target = format!("{dest}/{prefix}");
             let out = shell::run("ip", &["route", "show", &target]).await;
             out.ok && !out.stdout.trim().is_empty()
         }
         #[cfg(target_os = "macos")]
         {
-            let out = shell::run("route", &["-n", "get", &target]).await;
+            let _ = prefix;
+            let out = shell::run("route", &["-n", "get", dest]).await;
+            let expected = format!("interface: {}", self.ifname);
             out.ok
+                && out
+                    .stdout
+                    .lines()
+                    .any(|line| line.trim() == expected.as_str())
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    async fn has_route_via(&self, dest: &str, gateway: &str) -> bool {
+        let out = shell::run("route", &["-n", "get", dest]).await;
+        let expected = format!("gateway: {gateway}");
+        out.ok
+            && out
+                .stdout
+                .lines()
+                .any(|line| line.trim() == expected.as_str())
+    }
+
+    async fn route_ok(&self, dest: &str, prefix: u8, gateway: Option<&str>) -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            let _ = gateway;
+            self.has_route(dest, prefix).await
+        }
+        #[cfg(target_os = "macos")]
+        {
+            match gateway {
+                Some(gateway) => self.has_route_via(dest, gateway).await,
+                None => self.has_route(dest, prefix).await,
+            }
         }
     }
 
@@ -229,6 +403,47 @@ impl NetConfig {
             })
         }
     }
+}
+
+/// 解析 `networksetup -listnetworkserviceorder`，按设备名找到网络服务
+#[cfg(target_os = "macos")]
+fn parse_network_service_order(text: &str, ifname: &str) -> Option<String> {
+    let mut pending: Option<String> = None;
+    for line in text.lines() {
+        let line = line.trim();
+        let Some(rest) = line.strip_prefix('(') else {
+            continue;
+        };
+        let Some(end) = rest.find(')') else {
+            continue;
+        };
+        let inner = &rest[..end];
+        if !inner.is_empty() && inner.chars().all(|ch| ch.is_ascii_digit()) {
+            pending = Some(rest[end + 1..].trim().to_string());
+            continue;
+        }
+        if let Some(device) = line.split("Device:").nth(1) {
+            let device = device.trim().trim_end_matches(')').trim();
+            if device == ifname {
+                if let Some(service) = pending.take() {
+                    return Some(service);
+                }
+            } else {
+                pending = None;
+            }
+        }
+    }
+    None
+}
+
+/// 解析 `networksetup -getdnsservers` 输出；自动获取时没有 IP 行
+#[cfg(target_os = "macos")]
+fn parse_dns_servers(text: &str) -> Vec<String> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| line.parse::<std::net::IpAddr>().is_ok())
+        .map(str::to_string)
+        .collect()
 }
 
 /// 解析 Linux `ip addr` 或 macOS `ifconfig` 输出中的 IPv4 地址。
@@ -311,5 +526,36 @@ mod tests {
         let text =
             "inet6 fe80::1%topsap0 prefixlen 64\n    inet 192.0.2.10/24 scope global topsap0\n";
         assert_eq!(parse_interface_addresses(text), vec!["192.0.2.10"]);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn 解析网络服务顺序() {
+        let text = "An asterisk (*) denotes that a network service is disabled.\n\
+                    (1) Wi-Fi\n\
+                    (Hardware Port: Wi-Fi, Device: en0)\n\
+                    (2) Ethernet\n\
+                    (Hardware Port: Ethernet, Device: en1)\n";
+        assert_eq!(
+            parse_network_service_order(text, "en0").as_deref(),
+            Some("Wi-Fi")
+        );
+        assert_eq!(
+            parse_network_service_order(text, "en1").as_deref(),
+            Some("Ethernet")
+        );
+        assert_eq!(parse_network_service_order(text, "en9"), None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn 解析DNS列表() {
+        assert_eq!(
+            parse_dns_servers(
+                "8.8.8.8\n2001:4860:4860::8888\nThere aren't any DNS Servers set on Wi-Fi.\n"
+            ),
+            vec!["8.8.8.8", "2001:4860:4860::8888"]
+        );
+        assert!(parse_dns_servers("There aren't any DNS Servers set on Wi-Fi.\n").is_empty());
     }
 }

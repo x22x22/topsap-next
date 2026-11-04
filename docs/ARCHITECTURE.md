@@ -291,11 +291,11 @@ TLS 建连（不校验证书、不发 SNI）
 
 ### 6.3 网络配置
 
-- 网卡：Wintun，名称 `TopSAP`，固定 GUID，MTU 1400
+- 网卡：Windows 使用 Wintun（`TopSAP`，固定 GUID）；macOS 使用系统 utun；Linux 使用 `/dev/net/tun`；MTU 1400
 - 地址：`net_param.vip_v4` / `vip_mask`
-- 路由：按 ACL 目标网段与资源 `ip/mask` 并集生成；ACL 目标优先非零 `d_ip_v4`，否则取 `d_ip_v6`；`route_list` 不使用；网关 IP 必须加旁路路由
+- 路由：按 ACL 目标网段与资源 `ip/mask` 并集生成；ACL 目标优先非零 `d_ip_v4`，否则取 `d_ip_v6`；`route_list` 不使用；网关 IP 必须加旁路路由；macOS 使用 `route -n add -net <dest> -netmask <mask> <VIP>`，Linux 使用 `ip route add <dest>/<prefix> dev <ifname>`
 - 内网域名：解析 `dns_info.dns_list` 后仅保留在会话数据中，不修改系统 hosts（与原客户端一致）；`hosts` 模块保留用于清理旧版本残留
-- DNS：网卡 DNS 设 `dns1_v4`，不劫持全局
+- DNS：Windows 设置网卡 DNS `dns1_v4` / `dns2_v4`；macOS 通过 `networksetup` 把当前网络服务改为手动 DNS，VPN DNS 在前、原 DNS 在后，断开时恢复原列表或自动获取；Linux 不修改全局 DNS
 
 ---
 

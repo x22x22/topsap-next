@@ -30,12 +30,12 @@ fn socket_path() -> PathBuf {
 
 /// 启动时确保 helper 已安装且版本一致；用户取消授权时返回错误但不阻止 GUI 启动
 pub fn ensure_helper() -> Result<(), String> {
-    if ping().as_deref() == Some(env!("CARGO_PKG_VERSION")) {
+    if ping().as_deref() == Some(crate::helper::HELPER_VERSION) {
         return Ok(());
     }
     install_helper()?;
     for _ in 0..50 {
-        if ping().as_deref() == Some(env!("CARGO_PKG_VERSION")) {
+        if ping().as_deref() == Some(crate::helper::HELPER_VERSION) {
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(100));

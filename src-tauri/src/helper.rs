@@ -16,7 +16,8 @@ use serde::{Deserialize, Serialize};
 use crate::tun::TunDevice;
 
 const SOCKET_DIR: &str = "/var/run/topsap-next";
-const HELPER_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// helper 权限/协议版本；新增白名单命令时必须递增，触发已安装 helper 重装
+pub const HELPER_VERSION: &str = "1.2.1";
 
 #[derive(Debug, Deserialize)]
 struct Request {
@@ -188,8 +189,12 @@ fn run_command(request: &Request) -> Response {
     let program = match request.program.as_str() {
         "ifconfig" => "/sbin/ifconfig",
         "route" => "/sbin/route",
+        "networksetup" => "/usr/sbin/networksetup",
         _ => return Response::error("不允许的命令"),
     };
+    if request.program == "networksetup" && !allowed_networksetup(&request.args) {
+        return Response::error("不允许的 networksetup 参数");
+    }
     match Command::new(program).args(&request.args).output() {
         Ok(output) => Response {
             ok: output.status.success(),
@@ -212,6 +217,31 @@ fn limit_output(bytes: &[u8]) -> String {
         bytes
     };
     String::from_utf8_lossy(slice).into_owned()
+}
+
+/// 只允许读取网络服务与设置 DNS，避免 helper 被用于任意 networksetup 操作
+fn allowed_networksetup(args: &[String]) -> bool {
+    match args.first().map(String::as_str) {
+        Some("-listnetworkserviceorder") | Some("-listallnetworkservices") => args.len() == 1,
+        Some("-getdnsservers") | Some("-getinfo") => args.len() == 2 && valid_service(&args[1]),
+        Some("setdnsservers") => {
+            args.len() >= 3
+                && args.len() <= 10
+                && valid_service(&args[1])
+                && args[2..].iter().all(|value| {
+                    value.as_str() == "Empty" || value.parse::<std::net::IpAddr>().is_ok()
+                })
+        }
+        _ => false,
+    }
+}
+
+fn valid_service(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && !value
+            .chars()
+            .any(|ch| ch == '\n' || ch == '\r' || ch == '\0')
 }
 
 fn create_tun(stream: &mut UnixStream, request: &Request) {

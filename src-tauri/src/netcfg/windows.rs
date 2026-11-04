@@ -374,7 +374,7 @@ impl NetConfig {
         still
     }
 
-    pub async fn set_dns(&mut self, dns1: &str) -> bool {
+    pub async fn set_dns(&mut self, dns1: &str, dns2: &str) -> bool {
         if dns1.is_empty() || dns1 == "0.0.0.0" {
             return false;
         }
@@ -393,6 +393,21 @@ impl NetConfig {
             ],
         )
         .await;
+        if !dns2.is_empty() && dns2 != "0.0.0.0" {
+            let _ = shell::run(
+                "netsh",
+                &[
+                    "interface",
+                    "ipv4",
+                    "add",
+                    "dnsservers",
+                    &name_arg,
+                    dns2,
+                    "index=2",
+                ],
+            )
+            .await;
+        }
         out.ok
     }
 

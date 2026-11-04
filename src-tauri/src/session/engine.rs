@@ -950,18 +950,26 @@ impl Engine {
             ));
         }
 
-        let dns_ok = net.set_dns(&session.dns1).await;
+        let dns_ok = net.set_dns(&session.dns1, &session.dns2).await;
         // 原客户端不修改系统 hosts；dns_info 仅解析保留，不写系统文件
+        let dns_servers = if session.dns2.is_empty() {
+            session.dns1.clone()
+        } else {
+            format!("{} / {}", session.dns1, session.dns2)
+        };
+        let dns_note = if dns_ok {
+            ""
+        } else if cfg!(target_os = "linux") {
+            "（Linux 不修改系统 DNS）"
+        } else {
+            "（网卡 DNS 设置失败）"
+        };
         self.log(format!(
             "已注入 {}/{} 条路由，DNS {}{}",
             report.ok,
             session.routes.len(),
-            session.dns1,
-            if dns_ok {
-                ""
-            } else {
-                "（网卡 DNS 设置失败）"
-            }
+            dns_servers,
+            dns_note
         ));
 
         // 上行：网卡 → 隧道
