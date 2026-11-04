@@ -249,13 +249,15 @@ TopSAP-Next/
 | 提交登录 | `POST /vone/login/user_pswd` | `U/P` 明文，`HASH` 64 个 0，`S_CODE` 随机 |
 | 发送动态验证码 | `POST /vone/login/send_sms` | 仅 `-40039` 二次认证时调用；`U` 明文、`P` 为空、`Gid`；`SMS_TIME` 取 `topsecsveee` Cookie |
 | 提交动态验证码 | `POST /vone/login/user_pswd` | `U/SMS/SMS_TIME=0/HASH/S_CODE`；复用 `-40039` 挑战 Cookie，`HASH/S_CODE` 与密码请求一致，不发送 `sv_un` |
-| 密码到期/首次登录 | `-40022/-40023/-40024/-40199` | 弹出无会话改密窗口，成功后自动重连；忘记密码重置后记录 7 天标记并先尝试刷新有效期 |
+| 密码到期/首次登录 | `-40022/-40023/-40024/-40199` | 弹出无会话改密窗口，成功后自动重连；`-40081` 的 `ErrMsg` 明确提到密码到期/首次登录时同样转入该窗口；忘记密码重置后记录 7 天标记并先尝试刷新有效期 |
 | 登录到期提醒 | `user_param.pwd_remind/account_end` | 连接成功后分别 toast 密码剩余天数与账号剩余天数，0 不提示 |
 | 找回密码 | `POST /vone/find_pswd` | 第一步 `Gid/S_Gid` 同一验证码；`-40230` 后第二步 `SMS` + 明文新密码 |
 | 修改密码 | `POST /vone/chg_pwd` | 已登录会话；请求体仅明文 `P1/P2`，Cookie 的 `sv_un` 为明文账号并带 `seccheck=0` 与会话 ID；成功后按原客户端注销会话并清除本地记住的旧密码 |
 | 注销 | `POST /vone/login/logout` | Cookie 带 session_id |
 
 公共头：`User-Agent: VONE-AUTH,WINDOWS,NULL,TOPCLINET,NULL`。
+
+验证码策略取 `auth_param.gid`（`on`/`auto`/`off`）与 `login_check_verify`；`auto` 模式在 `login_err_num >= 3` 后要求图形验证码，失败次数按账号跨连接保留，与原客户端 Cookie 行为一致。
 
 表单编码陷阱：`+` 必须编码为 `%2B`，空格编码为 `+`。
 

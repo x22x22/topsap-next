@@ -95,6 +95,7 @@ export function ConnectPage({
   const [forgotOpen, setForgotOpen] = useState(false);
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
   const [passwordAutoFilled, setPasswordAutoFilled] = useState(false);
+  const [passwordAccount, setPasswordAccount] = useState<string | null>(null);
   const [expiredOpen, setExpiredOpen] = useState(false);
   const [probingLines, setProbingLines] = useState(false);
   const [lineProbes, setLineProbes] = useState<LineProbe[]>([]);
@@ -163,7 +164,10 @@ export function ConnectPage({
       api
         .loadPassword(settings.user)
         .then((password) => {
-          if (password) setForm((prev) => ({ ...prev, password }));
+          if (password) {
+            setForm((prev) => ({ ...prev, password }));
+            setPasswordAccount(settings.user);
+          }
         })
         .catch(() => {
           // 读不到已保存密码时保持空值，由用户重新输入
@@ -189,6 +193,18 @@ export function ConnectPage({
 
   const update = (patch: Partial<LoginForm>) =>
     setForm((prev) => ({ ...prev, ...patch }));
+
+  const updateUser = (user: string) => {
+    const switched =
+      passwordAutoFilled && passwordAccount !== null && user.trim() !== passwordAccount;
+    if (switched) {
+      setPasswordAutoFilled(false);
+      setPasswordAccount(null);
+      setForm((prev) => ({ ...prev, user, password: "" }));
+      return;
+    }
+    setForm((prev) => ({ ...prev, user }));
+  };
 
 
   const connected = engine.phase === "connected";
@@ -374,7 +390,7 @@ export function ConnectPage({
                   <UserRound className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-faint" />
                   <Input
                     value={form.user}
-                    onChange={(event) => update({ user: event.target.value })}
+                    onChange={(event) => updateUser(event.target.value)}
                     placeholder={t("登录账号")}
                     autoComplete="username"
                     spellCheck={false}
@@ -509,6 +525,7 @@ export function ConnectPage({
           const next = { ...form, password: newPassword };
           setForm(next);
           setPasswordAutoFilled(true);
+          setPasswordAccount(next.user.trim());
           setExpiredOpen(false);
           engine.clearPasswordChange?.();
           onConnect(next, { passwordAutoFilled: true });
@@ -521,6 +538,7 @@ export function ConnectPage({
         onSaved={(newPassword) => {
           setForm((prev) => ({ ...prev, password: newPassword }));
           setPasswordAutoFilled(true);
+          setPasswordAccount(form.user.trim());
         }}
       />
 
@@ -530,6 +548,11 @@ export function ConnectPage({
         port={form.port ?? 443}
         defaultUser={form.user}
         onClose={() => setForgotOpen(false)}
+        onReset={(user, newPassword) => {
+          setForm((prev) => ({ ...prev, user, password: newPassword }));
+          setPasswordAutoFilled(true);
+          setPasswordAccount(user);
+        }}
       />
     </div>
   );

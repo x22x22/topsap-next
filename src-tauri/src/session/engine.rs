@@ -94,6 +94,8 @@ pub struct Engine {
     inner: Mutex<Inner>,
     captcha: Mutex<Option<oneshot::Sender<String>>>,
     sms: Mutex<Option<oneshot::Sender<String>>>,
+    /// 网关下发的登录失败次数，跨连接保留以复现 auto 验证码策略
+    login_err_num: Mutex<std::collections::HashMap<String, u32>>,
     /// 防止用户连点或事件延迟导致并发连接
     connecting: AtomicBool,
 }
@@ -115,6 +117,7 @@ impl Engine {
             inner: Mutex::new(Inner::new()),
             captcha: Mutex::new(None),
             sms: Mutex::new(None),
+            login_err_num: Mutex::new(std::collections::HashMap::new()),
             connecting: AtomicBool::new(false),
         })
     }
@@ -129,6 +132,26 @@ impl Engine {
 
     fn sms_lock(&self) -> std::sync::MutexGuard<'_, Option<oneshot::Sender<String>>> {
         self.sms.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn remembered_login_err_num(&self, host: &str, port: u16, user: &str) -> u32 {
+        let key = login_err_key(host, port, user);
+        self.login_err_num
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&key)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn remember_login_err_num(&self, host: &str, port: u16, user: &str, count: u32) {
+        let key = login_err_key(host, port, user);
+        let mut map = self.login_err_num.lock().unwrap_or_else(|e| e.into_inner());
+        if count == 0 {
+            map.remove(&key);
+        } else {
+            map.insert(key, count);
+        }
     }
 
     fn emit(&self, event: EngineEvent) {
@@ -620,6 +643,11 @@ impl Engine {
         if !auth_cookie.is_empty() {
             auth.set_cookie(auth_cookie);
         }
+        let remembered_err_num = self.remembered_login_err_num(&gateway, port, &form.user);
+        if remembered_err_num > 0 {
+            auth.set_login_err_num(remembered_err_num);
+        }
+        let mut captcha_required = param.captcha_required(remembered_err_num);
         self.log(format!(
             "网关能力探测完成（{}，验证码{}）",
             if param.vpn_version.is_empty() {
@@ -627,19 +655,21 @@ impl Engine {
             } else {
                 &param.vpn_version
             },
-            if param.need_captcha {
+            if captcha_required {
                 "必需"
+            } else if param.captcha_auto() {
+                "按失败次数"
             } else {
                 "非必需"
             }
         ));
 
-        let mut captcha_round = 0u32;
+        let mut captcha_prompts = 0u32;
         let mut session = loop {
-            let code = if param.need_captcha {
+            let code = if captcha_required {
                 self.set_phase(
                     Phase::CaptchaPending,
-                    if captcha_round == 0 {
+                    if captcha_prompts == 0 {
                         "正在获取验证码"
                     } else {
                         "正在刷新验证码"
@@ -671,12 +701,24 @@ impl Engine {
             match auth.submit(&code).await {
                 Ok(session) => break session,
                 Err(AuthError::Rejected { code: ret, .. })
-                    if param.need_captcha
+                    if captcha_required
                         && matches!(ret, -40135 | -40018)
-                        && captcha_round < 2 =>
+                        && captcha_prompts < 4 =>
                 {
-                    captcha_round += 1;
+                    captcha_prompts += 1;
                     self.log(format!("验证码校验失败（Ret={ret}），已自动刷新验证码"));
+                    continue;
+                }
+                Err(AuthError::Rejected { .. })
+                    if !captcha_required
+                        && param.captcha_auto()
+                        && auth.login_err_num() >= crate::auth::model::AUTO_CAPTCHA_THRESHOLD
+                        && captcha_prompts < 3 =>
+                {
+                    captcha_prompts += 1;
+                    captcha_required = true;
+                    self.remember_login_err_num(&gateway, port, &form.user, auth.login_err_num());
+                    self.log("登录失败次数已达到网关上限，接下来需要输入图形验证码");
                     continue;
                 }
                 Err(AuthError::Rejected { code: -40077, .. }) => {
@@ -767,12 +809,14 @@ impl Engine {
                 }
                 Err(err) => {
                     let message = err.user_message();
+                    self.remember_login_err_num(&gateway, port, &form.user, auth.login_err_num());
                     self.log(format!("登录失败：{message}"));
                     self.set_phase(Phase::Failed, message.clone());
                     return Err(message);
                 }
             }
         };
+        self.remember_login_err_num(&gateway, port, &form.user, 0);
         let session_cookie = auth.cookie().map(str::to_string);
         password_reset::clear(&self.app, &gateway, port, &form.user);
         if session.gateway_version.is_empty() {
@@ -1245,6 +1289,15 @@ fn build_candidates(form: &crate::dto::LoginForm) -> Vec<(String, u16)> {
         out.push((form.gateway.clone(), form.port_or_default()));
     }
     out
+}
+
+fn login_err_key(host: &str, port: u16, user: &str) -> String {
+    format!(
+        "{}:{}:{}",
+        host.trim().to_ascii_lowercase(),
+        port,
+        user.trim()
+    )
 }
 
 /// 按连接模式选择线路：0 单线路、1 并发优选、2 顺序备份

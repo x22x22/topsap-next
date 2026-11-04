@@ -32,26 +32,70 @@ pub struct AclEntry {
     pub end: String,
 }
 
+/// 网关的图形验证码策略，对应 `auth_param.gid` 与 `login_check_verify`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptchaMode {
+    /// 不需要验证码
+    Off,
+    /// 连续失败达到阈值后才要求验证码
+    Auto,
+    /// 每次登录都要求验证码
+    On,
+}
+
+/// auto 模式下触发图形验证码的失败次数，与原客户端 `login_err_num >= 3` 一致
+pub const AUTO_CAPTCHA_THRESHOLD: u32 = 3;
+
 /// 网关能力探测结果
 #[derive(Debug, Clone)]
 pub struct AuthParam {
     pub vpn_version: String,
     pub cipher_type: i32,
-    pub need_captcha: bool,
+    pub captcha_mode: CaptchaMode,
+    /// 网关额外要求验证码（`login_check_verify=on`）
+    pub verify_captcha: bool,
     pub auth_port: Option<u16>,
     pub data_port: Option<u16>,
 }
 
 impl AuthParam {
     pub fn from_value(value: &Value) -> Self {
-        let captcha = get_i64(value, "captcha").unwrap_or(0);
+        let gid = get_string(value, "gid");
+        let legacy = get_i64(value, "captcha").unwrap_or(0) != 0;
+        let captcha_mode = match gid.trim().to_ascii_lowercase().as_str() {
+            "on" => CaptchaMode::On,
+            "auto" => CaptchaMode::Auto,
+            "off" => CaptchaMode::Off,
+            // 老网关只下发数字型 captcha 字段，兼容保留
+            _ if legacy => CaptchaMode::On,
+            _ => CaptchaMode::Off,
+        };
+        let verify = get_string(value, "login_check_verify");
+        let verify_captcha = verify.trim().eq_ignore_ascii_case("on")
+            || verify.trim() == "1"
+            || matches!(value.get("login_check_verify"), Some(Value::Bool(true)));
         Self {
             vpn_version: get_string(value, "vpn_version"),
             cipher_type: get_i64(value, "cipher_type").unwrap_or(0) as i32,
-            need_captcha: captcha != 0,
+            captcha_mode,
+            verify_captcha,
             auth_port: get_i64(value, "auth_port").and_then(|v| u16::try_from(v).ok()),
             data_port: get_i64(value, "data_port").and_then(|v| u16::try_from(v).ok()),
         }
+    }
+
+    /// 本次登录是否需要图形验证码；auto 模式沿用网关下发的失败次数
+    pub fn captcha_required(&self, login_err_num: u32) -> bool {
+        match self.captcha_mode {
+            CaptchaMode::On => true,
+            CaptchaMode::Auto => login_err_num >= AUTO_CAPTCHA_THRESHOLD,
+            CaptchaMode::Off => self.verify_captcha,
+        }
+    }
+
+    /// auto 模式在失败次数达到阈值后需要转入验证码
+    pub fn captcha_auto(&self) -> bool {
+        self.captcha_mode == CaptchaMode::Auto
     }
 }
 
@@ -704,17 +748,33 @@ mod tests {
     }
 
     #[test]
-    fn 能力探测_需要验证码() {
-        let v = json!({"vpn_version": "ngvone", "cipher_type": 0, "captcha": 1});
-        let p = AuthParam::from_value(&v);
-        assert!(p.need_captcha);
-        assert_eq!(p.vpn_version, "ngvone");
-        assert_eq!(p.cipher_type, 0);
+    fn 能力探测_按原客户端字段解析验证码策略() {
+        let on = AuthParam::from_value(&json!({"gid": "on"}));
+        assert_eq!(on.captcha_mode, CaptchaMode::On);
+        assert!(on.captcha_required(0));
+
+        let auto = AuthParam::from_value(&json!({"gid": "auto"}));
+        assert_eq!(auto.captcha_mode, CaptchaMode::Auto);
+        assert!(auto.captcha_auto());
+        assert!(!auto.captcha_required(2));
+        assert!(auto.captcha_required(3));
+
+        let off = AuthParam::from_value(&json!({"gid": "off"}));
+        assert_eq!(off.captcha_mode, CaptchaMode::Off);
+        assert!(!off.captcha_required(9));
     }
 
     #[test]
-    fn 能力探测_不需要验证码() {
-        let v = json!({"captcha": "0"});
-        assert!(!AuthParam::from_value(&v).need_captcha);
+    fn 能力探测_兼容数字验证码与额外校验开关() {
+        let legacy = AuthParam::from_value(&json!({"captcha": 1}));
+        assert_eq!(legacy.captcha_mode, CaptchaMode::On);
+
+        let verify = AuthParam::from_value(&json!({"gid": "off", "login_check_verify": "on"}));
+        assert!(verify.captcha_required(0));
+
+        let none = AuthParam::from_value(&json!({"vpn_version": "ngvone", "cipher_type": 0}));
+        assert_eq!(none.vpn_version, "ngvone");
+        assert_eq!(none.cipher_type, 0);
+        assert!(!none.captcha_required(0));
     }
 }

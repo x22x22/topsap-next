@@ -6,7 +6,7 @@ use base64::Engine;
 use rand::RngCore;
 use serde_json::Value;
 
-use super::error::{gateway_error_message, AuthError};
+use super::error::{gateway_error_message, password_change_code_from_hint, AuthError};
 use super::http::{form_encode, HttpClient, HttpResponse};
 use super::json::loose_parse;
 use super::model::{normalize_login, AuthParam, LoginSession};
@@ -115,6 +115,8 @@ impl AuthClient {
     /// 提交账号密码与验证码
     pub async fn submit(&mut self, captcha_code: &str) -> Result<LoginSession, AuthError> {
         // 原生层最终发出的 U/P 为明文（前端 RSA/Base64 只是混淆）
+        self.apply_portal_cookies();
+        self.http.upsert_cookies(&[("sv_un", &self.user)]);
         let body = format!(
             "U={}&P={}&Gid={}&HASH={}&S_CODE={}",
             form_encode(&self.user),
@@ -146,6 +148,7 @@ impl AuthClient {
         })?;
 
         if ret != 0 {
+            self.absorb_login_err_num(&value);
             if ret == -40039 {
                 // 密码已通过，网关要求补交短信/企业微信动态验证码
                 return Err(AuthError::NeedSms {
@@ -153,24 +156,9 @@ impl AuthClient {
                     sms_time: self.sms_time(&value),
                 });
             }
-            if matches!(ret, -40022 | -40023 | -40024 | -40199) {
-                let user = value
-                    .get("user_name")
-                    .and_then(|v| v.as_str())
-                    .filter(|text| !text.trim().is_empty())
-                    .unwrap_or(&self.user)
-                    .to_string();
-                return Err(AuthError::PasswordChangeRequired { code: ret, user });
-            }
-            let gateway_msg = value
-                .get("ErrMsg")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default();
-            return Err(AuthError::Rejected {
-                code: ret,
-                message: gateway_error_message(ret, gateway_msg),
-            });
+            return Err(login_rejection(ret, &value, &self.user));
         }
+        self.http.upsert_cookies(&[("login_err_num", "0")]);
 
         normalize_login(&value, &self.host, self.port)
     }
@@ -211,30 +199,16 @@ impl AuthClient {
             })?;
 
         if ret != 0 {
+            self.absorb_login_err_num(&value);
             if ret == -40039 {
                 return Err(AuthError::NeedSms {
                     challenge: read_bool(&value, "sms_challenge"),
                     sms_time: self.sms_time(&value),
                 });
             }
-            if matches!(ret, -40022 | -40023 | -40024 | -40199) {
-                let user = value
-                    .get("user_name")
-                    .and_then(|v| v.as_str())
-                    .filter(|text| !text.trim().is_empty())
-                    .unwrap_or(&self.user)
-                    .to_string();
-                return Err(AuthError::PasswordChangeRequired { code: ret, user });
-            }
-            let gateway_msg = value
-                .get("ErrMsg")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default();
-            return Err(AuthError::Rejected {
-                code: ret,
-                message: gateway_error_message(ret, gateway_msg),
-            });
+            return Err(login_rejection(ret, &value, &self.user));
         }
+        self.http.upsert_cookies(&[("login_err_num", "0")]);
 
         normalize_login(&value, &self.host, self.port)
     }
@@ -267,30 +241,16 @@ impl AuthClient {
         })?;
 
         if ret != 0 {
+            self.absorb_login_err_num(&value);
             if ret == -40039 {
                 return Err(AuthError::NeedSms {
                     challenge: read_bool(&value, "sms_challenge"),
                     sms_time: self.sms_time(&value),
                 });
             }
-            if matches!(ret, -40022 | -40023 | -40024 | -40199) {
-                let user = value
-                    .get("user_name")
-                    .and_then(|v| v.as_str())
-                    .filter(|text| !text.trim().is_empty())
-                    .unwrap_or(user)
-                    .to_string();
-                return Err(AuthError::PasswordChangeRequired { code: ret, user });
-            }
-            let gateway_msg = value
-                .get("ErrMsg")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default();
-            return Err(AuthError::Rejected {
-                code: ret,
-                message: gateway_error_message(ret, gateway_msg),
-            });
+            return Err(login_rejection(ret, &value, user));
         }
+        self.http.upsert_cookies(&[("login_err_num", "0")]);
 
         normalize_login(&value, &self.host, self.port)
     }
@@ -374,6 +334,31 @@ impl AuthClient {
 
     pub fn set_cookie(&mut self, cookie: impl Into<String>) {
         self.http.set_cookie(cookie);
+    }
+
+    /// 网关下发的登录失败次数，auto 验证码模式据此决定是否弹出验证码
+    pub fn login_err_num(&self) -> u32 {
+        self.http
+            .cookie_value("login_err_num")
+            .and_then(|value| value.trim().parse::<u32>().ok())
+            .unwrap_or(0)
+    }
+
+    /// 跨连接恢复失败次数，保持与原客户端 Cookie 相同的验证码判定
+    pub fn set_login_err_num(&mut self, count: u32) {
+        self.http
+            .upsert_cookies(&[("login_err_num", &count.to_string())]);
+    }
+
+    /// 登录失败响应会返回 `login_err_num`，原客户端把它写回 Cookie 供下次判定
+    fn absorb_login_err_num(&mut self, value: &Value) {
+        if let Some(count) = value.get("login_err_num").and_then(|item| match item {
+            Value::Number(number) => number.as_u64(),
+            Value::String(text) => text.trim().parse().ok(),
+            _ => None,
+        }) {
+            self.set_login_err_num(count.min(999) as u32);
+        }
     }
 
     /// 网关在挑战响应用 `topsecsveee` Cookie 下发提交短信登录所需的 SMS_TIME。
@@ -576,6 +561,34 @@ fn rejected_error(ret: i32, value: &Value) -> AuthError {
         .get("ErrMsg")
         .and_then(|v| v.as_str())
         .unwrap_or_default();
+    AuthError::Rejected {
+        code: ret,
+        message: gateway_error_message(ret, gateway_msg),
+    }
+}
+
+/// 登录失败归类：既识别原生的改密返回码，也识别网关包在 -40081 里的改密原因
+fn login_rejection(ret: i32, value: &Value, fallback_user: &str) -> AuthError {
+    let gateway_msg = value
+        .get("ErrMsg")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    let change_code = if matches!(ret, -40022 | -40023 | -40024 | -40199) {
+        Some(ret)
+    } else if matches!(ret, -40080 | -40081) {
+        password_change_code_from_hint(gateway_msg)
+    } else {
+        None
+    };
+    if let Some(code) = change_code {
+        let user = value
+            .get("user_name")
+            .and_then(|v| v.as_str())
+            .filter(|text| !text.trim().is_empty())
+            .unwrap_or(fallback_user)
+            .to_string();
+        return AuthError::PasswordChangeRequired { code, user };
+    }
     AuthError::Rejected {
         code: ret,
         message: gateway_error_message(ret, gateway_msg),
@@ -854,5 +867,37 @@ mod tests {
         assert_eq!(err.to_string(), "新密码不能与旧密码一致");
         let policy = reset_password_error(-40226, &json!({"ErrMsg": "密码长度至少8位"}));
         assert!(policy.to_string().contains("密码长度至少8位"));
+    }
+
+    #[test]
+    fn 登录失败次数写回_cookie() {
+        let mut auth = AuthClient::new("h", 443, "demo", "pwd");
+        auth.absorb_login_err_num(&json!({"login_err_num": 4}));
+        assert_eq!(auth.login_err_num(), 4);
+        auth.absorb_login_err_num(&json!({"login_err_num": "0"}));
+        assert_eq!(auth.login_err_num(), 0);
+    }
+
+    #[test]
+    fn 凭据错误携带密码状态时转入改密流程() {
+        let err = login_rejection(
+            -40081,
+            &json!({"ErrMsg": "密码已过期，请修改密码", "user_name": "temp777"}),
+            "fallback",
+        );
+        match err {
+            AuthError::PasswordChangeRequired { code, user } => {
+                assert_eq!(code, -40022);
+                assert_eq!(user, "temp777");
+            }
+            other => panic!("应识别为改密流程：{other:?}"),
+        }
+    }
+
+    #[test]
+    fn 普通凭据错误仍保持报错() {
+        let err = login_rejection(-40081, &json!({"ErrMsg": "用户名或密码错误"}), "demo");
+        assert!(matches!(err, AuthError::Rejected { code: -40081, .. }));
+        assert_eq!(err.to_string(), "账号或密码错误（Ret=-40081）");
     }
 }

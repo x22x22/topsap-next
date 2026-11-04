@@ -87,6 +87,13 @@ pub fn gateway_error_message(code: i32, fallback: &str) -> String {
     if code == -40226 && !fallback.trim().is_empty() {
         return percent_decode(fallback.trim());
     }
+    // 凭据错误码的固定文案会掩盖网关自己的原因（锁定、账号不存在等）
+    if matches!(code, -40080 | -40081) {
+        let decoded = percent_decode(fallback.trim());
+        if !decoded.is_empty() && !is_generic_credential_message(&decoded) {
+            return format!("{decoded}（Ret={code}）");
+        }
+    }
     let base = match code {
         -7 => "请求参数格式错误，请检查账号或密码是否包含特殊字符",
         -40018 => "验证码错误或已过期，请重新获取",
@@ -132,6 +139,38 @@ pub fn password_change_message(code: i32) -> String {
         _ => "需要修改密码后才能登录",
     }
     .to_string()
+}
+
+/// 部分网关把「密码到期/首次登录」等状态包在 -40081 的 ErrMsg 里返回。
+/// 只有文本明确指向密码状态时才转入改密流程，普通凭据错误不受影响。
+pub fn password_change_code_from_hint(message: &str) -> Option<i32> {
+    let text = percent_decode(message.trim());
+    if text.is_empty() {
+        return None;
+    }
+    if text.contains("有效期已到")
+        || text.contains("密码已过期")
+        || text.contains("密码过期")
+        || text.contains("密码到期")
+    {
+        Some(-40022)
+    } else if text.contains("首次登录") || text.contains("第一次登录") || text.contains("初始密码")
+    {
+        Some(-40024)
+    } else if text.contains("密码过于简单") || text.contains("密码太简单") {
+        Some(-40023)
+    } else if text.contains("管理员要求") && text.contains("密码") {
+        Some(-40199)
+    } else {
+        None
+    }
+}
+
+fn is_generic_credential_message(message: &str) -> bool {
+    message.contains("用户名或密码错误")
+        || message.contains("账号或密码错误")
+        || message.contains("用户名或密码不正确")
+        || message.contains("账号或密码不正确")
 }
 
 /// 网关 ErrMsg 常以 URL 编码返回中文策略文本，原前端使用 `unescape`。
@@ -271,5 +310,34 @@ mod tests {
         let err = AuthError::BadResponse("网关能力探测返回 HTTP 503".to_string());
         assert!(err.user_message().contains("503"));
         assert!(err.user_message().contains("稍后重试"));
+    }
+
+    #[test]
+    fn 凭据错误优先展示网关自己的原因() {
+        let msg = gateway_error_message(-40081, "用户已被锁定，请联系管理员");
+        assert_eq!(msg, "用户已被锁定，请联系管理员（Ret=-40081）");
+        // 网关文案与固定文案等价时不重复
+        assert_eq!(
+            gateway_error_message(-40081, "用户名或密码错误"),
+            "账号或密码错误（Ret=-40081）"
+        );
+    }
+
+    #[test]
+    fn 凭据错误里的密码状态提示转为改密() {
+        assert_eq!(
+            password_change_code_from_hint("密码已过期，请修改密码"),
+            Some(-40022)
+        );
+        assert_eq!(
+            password_change_code_from_hint("首次登录，请修改初始密码"),
+            Some(-40024)
+        );
+        assert_eq!(
+            password_change_code_from_hint("管理员要求修改密码"),
+            Some(-40199)
+        );
+        assert_eq!(password_change_code_from_hint("用户名或密码错误"), None);
+        assert_eq!(password_change_code_from_hint(""), None);
     }
 }

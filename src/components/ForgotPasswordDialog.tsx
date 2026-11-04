@@ -17,12 +17,15 @@ export function ForgotPasswordDialog({
   port,
   defaultUser,
   onClose,
+  onReset,
 }: {
   open: boolean;
   gateway: string;
   port: number;
   defaultUser: string;
   onClose: () => void;
+  /** 重置成功：把新密码带回登录表单，避免继续使用旧密码登录 */
+  onReset?: (user: string, newPassword: string) => void;
 }) {
   const { t } = useI18n();
   const [user, setUser] = useState(defaultUser);
@@ -140,6 +143,7 @@ export function ForgotPasswordDialog({
           ? t("密码已重置，通知已发送至 {target}", { target: result.target })
           : t("密码已重置，请使用新密码登录"),
       );
+      onReset?.(user.trim(), newPassword);
       onClose();
     } catch (error) {
       toast.error(firstLine(String(error)), { duration: 8000 });
