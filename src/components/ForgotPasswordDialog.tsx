@@ -140,8 +140,10 @@ export function ForgotPasswordDialog({
       );
       toastPasswordSuccess(
         result.target
-          ? t("密码已重置，通知已发送至 {target}", { target: result.target })
-          : t("密码已重置，请使用新密码登录"),
+          ? t("密码已重置，通知已发送至 {target}（新密码已自动填入）", {
+              target: result.target,
+            })
+          : t("密码已重置，请使用新密码登录（新密码已自动填入）"),
       );
       onReset?.(user.trim(), newPassword);
       onClose();

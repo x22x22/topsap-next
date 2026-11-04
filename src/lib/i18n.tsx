@@ -191,8 +191,10 @@ const EN: Record<string, string> = {
   "重置密码已发送至 {target}": "Reset instructions sent to {target}",
   "请求已提交，请查看绑定的邮箱":
     "Request submitted. Check the bound email.",
-  "密码已重置，通知已发送至 {target}": "Password reset; notification sent to {target}",
-  "密码已重置，请使用新密码登录": "Password reset. Sign in with the new password.",
+  "密码已重置，通知已发送至 {target}（新密码已自动填入）":
+    "Password reset; notification sent to {target} (the new password has been filled in automatically)",
+  "密码已重置，请使用新密码登录（新密码已自动填入）":
+    "Password reset. Sign in with the new password (it has been filled in automatically).",
   "获取验证码失败": "Failed to fetch captcha",
 
   // 连接配置
@@ -303,6 +305,7 @@ const EN: Record<string, string> = {
   "通过": "Passed",
   "失败": "Failed",
   "定位 wintun.dll": "Locate wintun.dll",
+  "清理上次自检残留": "Clean up the previous self-test adapter",
   "TUN 设备": "TUN device",
   "创建虚拟网卡与会话": "Create virtual adapter and session",
   "配置网卡地址": "Configure adapter address",
@@ -391,6 +394,10 @@ const EN: Record<string, string> = {
     "The self-test checks administrator rights, wintun.dll, adapter creation, address configuration, read-back, test route, write path and read path. It separates adapter faults from protocol faults; run it first when troubleshooting.",
   "自检通过": "Self-test passed",
   "存在失败项": "Some steps failed",
+  "自检进行中": "Self-test running",
+  "自检中断": "Self-test interrupted",
+  "已完成 {n} 项": "{n} steps completed",
+  "正在执行下一项…": "Running the next step…",
   "{passed}/{total} 项": "{passed}/{total} steps",
   "尚未运行自检": "Self-test not run yet",
   "建议在首次连接前或连接失败时执行一次":
