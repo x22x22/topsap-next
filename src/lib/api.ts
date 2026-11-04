@@ -14,6 +14,7 @@ import type {
   ProxyBypassStatus,
   ResidueReport,
   SelfTestReport,
+  SelfTestStep,
   SessionSummary,
   Stats,
 } from "../types/engine";
@@ -98,5 +99,12 @@ export const api = {
       return Promise.resolve(unsubscribe);
     }
     return listen<EngineEvent>("engine://event", (event) => handler(event.payload));
+  },
+
+  onSelfTestStep: (handler: (step: SelfTestStep) => void): Promise<UnlistenFn> => {
+    if (isMockMode()) {
+      return Promise.resolve(() => {});
+    }
+    return listen<SelfTestStep>("self_test://step", (event) => handler(event.payload));
   },
 };

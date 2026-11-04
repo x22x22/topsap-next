@@ -58,17 +58,26 @@ impl SelfTestReport {
     }
 }
 
-struct Builder {
+struct Builder<F: FnMut(&SelfTestStep)> {
     steps: Vec<SelfTestStep>,
+    on_step: F,
 }
 
-impl Builder {
-    fn new() -> Self {
-        Self { steps: Vec::new() }
+impl<F: FnMut(&SelfTestStep)> Builder<F> {
+    fn new(on_step: F) -> Self {
+        Self {
+            steps: Vec::new(),
+            on_step,
+        }
+    }
+
+    fn push(&mut self, step: SelfTestStep) {
+        (self.on_step)(&step);
+        self.steps.push(step);
     }
 
     fn ok(&mut self, name: &'static str, detail: impl Into<String>) {
-        self.steps.push(SelfTestStep {
+        self.push(SelfTestStep {
             name,
             status: StepStatus::Ok,
             detail: detail.into(),
@@ -76,7 +85,7 @@ impl Builder {
     }
 
     fn fail(&mut self, name: &'static str, detail: impl Into<String>) {
-        self.steps.push(SelfTestStep {
+        self.push(SelfTestStep {
             name,
             status: StepStatus::Fail,
             detail: detail.into(),
@@ -84,7 +93,7 @@ impl Builder {
     }
 
     fn info(&mut self, name: &'static str, detail: impl Into<String>) {
-        self.steps.push(SelfTestStep {
+        self.push(SelfTestStep {
             name,
             status: StepStatus::Info,
             detail: detail.into(),
@@ -96,8 +105,8 @@ impl Builder {
     }
 }
 
-pub async fn run(dll_path: &Path) -> SelfTestReport {
-    let mut b = Builder::new();
+pub async fn run<F: FnMut(&SelfTestStep)>(dll_path: &Path, on_step: F) -> SelfTestReport {
+    let mut b = Builder::new(on_step);
 
     if !is_elevated().await {
         #[cfg(windows)]
@@ -128,6 +137,23 @@ pub async fn run(dll_path: &Path) -> SelfTestReport {
         b.ok("TUN 设备", "使用系统 TUN，无需额外驱动");
     }
 
+    #[cfg(windows)]
+    {
+        match reset_windows_adapter().await {
+            Ok(Some(detail)) => b.ok("清理上次自检残留", detail),
+            Ok(None) => b.info("清理上次自检残留", "未发现遗留的 TopSAP 虚拟网卡"),
+            Err(err) => {
+                b.fail(
+                    "清理上次自检残留",
+                    format!("{err}；请先断开连接或手动删除网卡后重试"),
+                );
+                return b.finish();
+            }
+        }
+    }
+    #[cfg(unix)]
+    b.info("清理上次自检残留", "系统 TUN 随进程关闭自动释放，无需清理");
+
     let device = match TunDevice::open_for(dll_path, ADAPTER_NAME, TEST_VIP, TEST_MASK) {
         Ok(d) => {
             b.ok("创建虚拟网卡与会话", format!("网卡 {}", d.interface_name()));
@@ -149,8 +175,7 @@ pub async fn run(dll_path: &Path) -> SelfTestReport {
         Err(err) => {
             b.fail("配置网卡地址", err.to_string());
             b.fail("回读网卡地址", "地址未生效");
-            cleanup(&mut net, &device).await;
-            return b.finish();
+            return finish_with_cleanup(b, &mut net, device, dll_path).await;
         }
     }
 
@@ -232,8 +257,67 @@ pub async fn run(dll_path: &Path) -> SelfTestReport {
 
     running.store(false, Ordering::Relaxed);
     let _ = reader.join();
-    cleanup(&mut net, &device).await;
+    finish_with_cleanup(b, &mut net, device, dll_path).await
+}
+
+async fn finish_with_cleanup<F: FnMut(&SelfTestStep)>(
+    b: Builder<F>,
+    net: &mut NetConfig,
+    device: Arc<TunDevice>,
+    _dll_path: &Path,
+) -> SelfTestReport {
+    cleanup(net, &device).await;
+    drop(device);
+    #[cfg(windows)]
+    let _ = reset_windows_adapter().await;
     b.finish()
+}
+
+/// 清理遗留的 Wintun 网卡；返回 Some(detail) 表示执行过清理。
+#[cfg(windows)]
+async fn reset_windows_adapter() -> Result<Option<String>, String> {
+    if crate::platform::is_windows7() {
+        let disable = shell::run(
+            "netsh",
+            &[
+                "interface",
+                "set",
+                "interface",
+                ADAPTER_NAME,
+                "admin=disabled",
+            ],
+        )
+        .await;
+        let enable = shell::run(
+            "netsh",
+            &[
+                "interface",
+                "set",
+                "interface",
+                ADAPTER_NAME,
+                "admin=enabled",
+            ],
+        )
+        .await;
+        if disable.ok || enable.ok {
+            return Ok(Some("已重置遗留的 TopSAP 网卡状态".to_string()));
+        }
+        return Ok(None);
+    }
+
+    let script = format!(
+        "$a = Get-NetAdapter -Name '{}' -ErrorAction SilentlyContinue; if ($a) {{ $a | Remove-NetAdapter -Confirm:$false -ErrorAction Stop; 'removed' }} else {{ 'absent' }}",
+        ADAPTER_NAME
+    );
+    let out = shell::powershell(&script).await;
+    if !out.ok {
+        return Err(out.text().trim().to_string());
+    }
+    if out.stdout.contains("removed") {
+        Ok(Some("已删除遗留的 TopSAP 虚拟网卡".to_string()))
+    } else {
+        Ok(None)
+    }
 }
 
 async fn cleanup(net: &mut NetConfig, _device: &TunDevice) {
