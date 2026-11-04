@@ -18,6 +18,7 @@ const DETAIL_EN: Array<[RegExp, string]> = [
   [/^使用系统 TUN，无需额外驱动$/, "Using the system TUN device; no extra driver is required"],
   [/^已删除遗留的 TopSAP 虚拟网卡$/, "Removed the leftover TopSAP virtual adapter"],
   [/^未发现遗留的 TopSAP 虚拟网卡$/, "No leftover TopSAP virtual adapter was found"],
+  [/^已重置遗留的 TopSAP 网卡状态$/, "Reset the state of the leftover TopSAP adapter"],
   [/^系统 TUN 随进程关闭自动释放，无需清理$/,
     "The system TUN device is released when the process exits; no cleanup is needed"],
   [/^删除虚拟网卡失败：网卡会话已存在或网卡状态异常，请清理残留网卡后重试（Win32 1247）；请先断开连接或手动删除网卡后重试$/,
