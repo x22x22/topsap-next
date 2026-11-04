@@ -114,16 +114,16 @@ impl AuthClient {
 
     /// 提交账号密码与验证码
     pub async fn submit(&mut self, captcha_code: &str) -> Result<LoginSession, AuthError> {
-        // 原生层最终发出的 U/P 为明文（前端 RSA/Base64 只是混淆）
+        // 官方客户端 3.6.6 起账号与密码字段均为 Base64，且无验证码时不发送 Gid
         self.apply_portal_cookies();
-        self.http.upsert_cookies(&[("sv_un", &self.user)]);
-        let body = format!(
-            "U={}&P={}&Gid={}&HASH={}&S_CODE={}",
-            form_encode(&self.user),
-            form_encode(&self.pass),
-            form_encode(captcha_code),
-            form_encode(&self.hash),
-            form_encode(&self.s_code),
+        self.http
+            .upsert_cookies(&[("sv_un", &form_encode(&encode_base64(&self.user)))]);
+        let body = password_login_body(
+            &self.user,
+            &self.pass,
+            captcha_code,
+            &self.hash,
+            &self.s_code,
         );
 
         let referer = format!("https://{}/vone/login/user_pswd/", self.host);
@@ -169,7 +169,7 @@ impl AuthClient {
     pub async fn kick_user(&mut self) -> Result<LoginSession, AuthError> {
         self.probe().await?;
 
-        let base64_user = encode_user(&self.user);
+        let base64_user = encode_base64(&self.user);
         self.http.upsert_cookies(&[("sv_un", &base64_user)]);
         let body = kick_login_body(&self.user, &self.hash, &self.s_code);
         let referer = format!("https://{}/vone/login/user_pswd_r/", self.host);
@@ -262,9 +262,10 @@ impl AuthClient {
         captcha: &str,
     ) -> Result<SmsSendResult, AuthError> {
         // 原生密码分支的 P 为空（密码已在 user_pswd 阶段校验），U 为明文，
-        // Gid 为登录时的图形验证码；Cookie 需带 sv_un。
+        // Gid 为登录时的图形验证码；Cookie 的 sv_un 为账号 Base64。
         self.apply_portal_cookies();
-        self.http.upsert_cookies(&[("sv_un", user)]);
+        self.http
+            .upsert_cookies(&[("sv_un", &form_encode(&encode_base64(user)))]);
         let body = if captcha.is_empty() {
             format!("U={}&P=", form_encode(user))
         } else {
@@ -396,7 +397,7 @@ impl AuthClient {
         user: &str,
         captcha_code: &str,
     ) -> Result<ForgetResult, AuthError> {
-        let base64_user = encode_user(user);
+        let base64_user = encode_base64(user);
         // 第一步：校验图形验证码并请求发送重置信息（动态码场景返回 -40230）
         // 原生实现中 Gid 与 S_Gid 使用同一个图形验证码值
         let body = format!(
@@ -428,22 +429,15 @@ impl AuthClient {
         })
     }
 
-    /// 第二步：动态验证码 + 新密码重置（P 为明文新密码）；-40230 同样表示重置成功
+    /// 第二步：动态验证码 + 新密码重置（P 为新密码的 Base64）；-40230 同样表示重置成功
     pub async fn reset_password(
         &mut self,
         user: &str,
         sms: &str,
         new_password: &str,
     ) -> Result<ForgetResult, AuthError> {
-        let base64_user = encode_user(user);
-        // 原生层会把前端的 RSA 密文解密后再发给网关；直接请求时 P 用明文新密码。
-        let body = format!(
-            "U={}&Base64_U={}&P={}&SMS={}&S_Gid=",
-            form_encode(user),
-            form_encode(&base64_user),
-            form_encode(new_password),
-            form_encode(sms),
-        );
+        // 官方客户端把新密码 Base64 后按表单提交；U 保持明文，Base64_U 为账号 Base64。
+        let body = reset_password_body(user, sms, new_password);
         let value = self.post_find_pswd(&body).await?;
         let ret =
             read_ret(&value).ok_or_else(|| AuthError::BadJson("响应缺少 Ret 字段".to_string()))?;
@@ -458,7 +452,7 @@ impl AuthClient {
         })
     }
 
-    /// 修改密码：Cookie 的 sv_un 为明文账号，P1/P2 为明文原密码与新密码
+    /// 修改密码：Cookie 的 sv_un 为账号 Base64，P1/P2 为原密码与新密码的 Base64
     pub async fn change_password(
         &mut self,
         user: &str,
@@ -466,29 +460,15 @@ impl AuthClient {
         new_password: &str,
         session_id: &str,
     ) -> Result<(), AuthError> {
-        // 原生层会解密前端 RSA 密文；直接请求时 P1/P2 使用明文密码。
-        // Cookie 的 sv_un 为明文账号；已有登录会话时请求体只发 P1/P2。
+        // 官方客户端 3.6.6 起改密字段同样为 Base64；已有会话时请求体只发 P1/P2。
         self.apply_portal_cookies();
         self.http
-            .upsert_cookies(&[("sv_un", user), ("seccheck", "0")]);
+            .upsert_cookies(&[("sv_un", &encode_base64(user)), ("seccheck", "0")]);
         if !session_id.is_empty() {
             self.http
                 .upsert_cookies(&[("topafasfassession_id", session_id)]);
         }
-        let body = if session_id.is_empty() {
-            format!(
-                "U={}&P1={}&P2={}",
-                form_encode(user),
-                form_encode(old_password),
-                form_encode(new_password),
-            )
-        } else {
-            format!(
-                "P1={}&P2={}",
-                form_encode(old_password),
-                form_encode(new_password),
-            )
-        };
+        let body = change_password_body(user, old_password, new_password, session_id);
 
         let referer = format!("https://{}/", self.host);
         let response = self
@@ -535,11 +515,58 @@ impl AuthClient {
     }
 }
 
+/// 密码登录表单：账号密码为 Base64；无验证码时官方客户端不发送 Gid 字段。
+fn password_login_body(user: &str, pass: &str, captcha: &str, hash: &str, s_code: &str) -> String {
+    let user = form_encode(&encode_base64(user));
+    let pass = form_encode(&encode_base64(pass));
+    if captcha.is_empty() {
+        format!(
+            "U={user}&P={pass}&HASH={}&S_CODE={}",
+            form_encode(hash),
+            form_encode(s_code)
+        )
+    } else {
+        format!(
+            "U={user}&P={pass}&Gid={}&HASH={}&S_CODE={}",
+            form_encode(captcha),
+            form_encode(hash),
+            form_encode(s_code)
+        )
+    }
+}
+
+/// 修改密码表单：无会话时带 U，已登录会话只发 P1/P2；三者均为 Base64。
+fn change_password_body(
+    user: &str,
+    old_password: &str,
+    new_password: &str,
+    session_id: &str,
+) -> String {
+    let old = form_encode(&encode_base64(old_password));
+    let new = form_encode(&encode_base64(new_password));
+    if session_id.is_empty() {
+        format!("U={}&P1={old}&P2={new}", form_encode(&encode_base64(user)))
+    } else {
+        format!("P1={old}&P2={new}")
+    }
+}
+
+/// 找回密码第二步：U 为明文账号，Base64_U 为账号 Base64，P 为新密码的 Base64。
+fn reset_password_body(user: &str, sms: &str, new_password: &str) -> String {
+    format!(
+        "U={}&Base64_U={}&P={}&SMS={}&S_Gid=",
+        form_encode(user),
+        form_encode(&encode_base64(user)),
+        form_encode(&encode_base64(new_password)),
+        form_encode(sms),
+    )
+}
+
 /// 踢出旧会话的 `user_pswd_r` 表单：U 为 Base64 账号，复用密码请求的 HASH/S_CODE。
 fn kick_login_body(user: &str, hash: &str, s_code: &str) -> String {
     format!(
         "U={}&HASH={}&S_CODE={}",
-        form_encode(&encode_user(user)),
+        form_encode(&encode_base64(user)),
         form_encode(hash),
         form_encode(s_code)
     )
@@ -549,7 +576,7 @@ fn kick_login_body(user: &str, hash: &str, s_code: &str) -> String {
 fn sms_login_body(user: &str, sms: &str, hash: &str, s_code: &str) -> String {
     format!(
         "U={}&SMS={}&SMS_TIME=0&HASH={}&S_CODE={}",
-        form_encode(user),
+        form_encode(&encode_base64(user)),
         form_encode(sms),
         form_encode(hash),
         form_encode(s_code),
@@ -666,9 +693,9 @@ pub struct SmsSendResult {
     pub valid_time: u32,
 }
 
-/// 原客户端所有 U 字段均使用 UTF-8 账号的 Base64。
-fn encode_user(user: &str) -> String {
-    base64::engine::general_purpose::STANDARD.encode(user.as_bytes())
+/// 官方客户端 3.6.6 起账号与密码字段均为 UTF-8 明文的 Base64，再按表单 URL 编码。
+fn encode_base64(value: &str) -> String {
+    base64::engine::general_purpose::STANDARD.encode(value.as_bytes())
 }
 
 /// 网关下发的 SMS_TIME；缺失时返回 None，由调用方回退 Cookie 或 60 秒。
@@ -844,8 +871,42 @@ mod tests {
 
     #[test]
     fn 动态验证码登录表单与官方客户端一致() {
-        let body = sms_login_body("demo", "713375", "H1", "S1");
-        assert_eq!(body, "U=demo&SMS=713375&SMS_TIME=0&HASH=H1&S_CODE=S1");
+        let body = sms_login_body("demo", "123456", "H1", "S1");
+        assert_eq!(
+            body,
+            "U=ZGVtbw%3D%3D&SMS=123456&SMS_TIME=0&HASH=H1&S_CODE=S1"
+        );
+    }
+
+    #[test]
+    fn 密码登录表单按官方客户端_base64_编码() {
+        let body = password_login_body("demo", "demo-pass", "", "H1", "S1");
+        assert_eq!(body, "U=ZGVtbw%3D%3D&P=ZGVtby1wYXNz&HASH=H1&S_CODE=S1");
+        let with_captcha = password_login_body("demo", "pwd", "IzX6", "H1", "S1");
+        assert_eq!(
+            with_captcha,
+            "U=ZGVtbw%3D%3D&P=cHdk&Gid=IzX6&HASH=H1&S_CODE=S1"
+        );
+    }
+
+    #[test]
+    fn 改密表单按官方客户端_base64_编码() {
+        assert_eq!(
+            change_password_body("demo", "demo-old", "demo-new", ""),
+            "U=ZGVtbw%3D%3D&P1=ZGVtby1vbGQ%3D&P2=ZGVtby1uZXc%3D"
+        );
+        assert_eq!(
+            change_password_body("demo", "demo-old", "demo-new", "sid"),
+            "P1=ZGVtby1vbGQ%3D&P2=ZGVtby1uZXc%3D"
+        );
+    }
+
+    #[test]
+    fn 找回密码第二步使用_base64_新密码() {
+        assert_eq!(
+            reset_password_body("demo", "123456", "demo-new"),
+            "U=demo&Base64_U=ZGVtbw%3D%3D&P=ZGVtby1uZXc%3D&SMS=123456&S_Gid="
+        );
     }
 
     #[test]

@@ -2,7 +2,7 @@
 
 本文件记录的是**实测确认**的行为，不是推测。凡是标注"推断"的地方都单独说明了依据。
 
-目标固件：TopSAP 客户端 3.6.4.16.64.1（天融信 NGVONE，`vpn_version=ngvone`、`cipher_type=0` 的网关）。
+目标固件：TopSAP 客户端 3.6.6.19.64.1（天融信 NGVONE，`vpn_version=ngvone`、`cipher_type=0` 的网关）；与 3.6.4.16.64.1 的差异在正文单独标注。
 
 ---
 
@@ -21,7 +21,7 @@
 公共请求头：
 
 ```
-User-Agent: VONE-AUTH,WINDOWS,NULL,TOPCLINET,NULL
+User-Agent: VONE-AUTH,WINDOWS,NULL,TOPCLINET,NULL,VERSION=3.6.6.19.64.1
 ```
 
 ### 2.1 能力探测
@@ -56,12 +56,14 @@ POST /vone/login/user_pswd
 Content-Type: application/x-www-form-urlencoded
 Cookie: cgid=...; topsecsvuilanguage=chinese
 
-U=<账号>&P=<密码>&Gid=<验证码>&HASH=<64位十六进制>&S_CODE=<16字节随机数的Base64>
+U=<Base64(账号)>&P=<Base64(密码)>&[Gid=<验证码>&]HASH=<64位十六进制>&S_CODE=<16字节随机数的Base64>
 ```
 
-实测结论：
+实测结论（官方客户端 3.6.6.19.64.1）：
 
-- **`U` 和 `P` 都是明文。** 前端 `sv_init.js` 里的 RSA + Base64 在 `ngvone` 路径下会被原生层解开，最终发出的是明文。对本网关而言那套加密只是混淆。
+- **`U` 和 `P` 都是 UTF-8 明文的 Base64，再按表单 URL 编码。** 例如账号 `demo` 发送为 `U=ZGVtbw%3D%3D`，密码字段同理为 `P=<Base64(密码)>`。早期 3.6.4 版本的抓包曾显示明文；当前网关按 Base64 解析，明文会被当作错误账号，本地账号尤其明显。
+- **不需要图形验证码时不发送 `Gid` 字段。** 官方格式为 `U/P/HASH/S_CODE`；需要验证码时才使用 `U/P/Gid/HASH/S_CODE`。空 `Gid=` 不是官方行为。
+- 登录 Cookie 的 `sv_un` 同样是 URL 编码后的账号 Base64，例如 `sv_un=ZGVtbw%3D%3D`。
 - **`HASH` 的内容不被校验。** 传 64 个 `0` 也能通过。可以推断该字段只在某些加固配置下参与校验，标准网关不检查。
 - `S_CODE` 传任意 16 字节随机数的 Base64 即可。
 - 参数中的 `+` 必须转义为 `%2B`，否则网关按 URL 解码会把 `+` 变成空格（官方客户端自己也踩过这个坑，报 `Ret=-7`）。
@@ -108,11 +110,12 @@ Cookie: topsecsvuilanguage=chinese; login_err_num=2; topsecsvportalstyle=style1;
         topsecsvportalname=default; topsecsvkkk=...; topsecsvaaa=...;
         topsecsvccc=...; topsecsvddd=...; topsecsveee=60; topsecsvfff=3
 
-U=<账号>&SMS=<动态验证码>&SMS_TIME=0&HASH=<密码请求的 HASH>&S_CODE=<密码请求的 S_CODE>
+U=<Base64(账号)>&SMS=<动态验证码>&SMS_TIME=0&HASH=<密码请求的 HASH>&S_CODE=<密码请求的 S_CODE>
 ```
 
 关键点：
 
+- `U` 为账号 Base64（URL 编码），与密码登录一致；官方日志示例 `U=aG9uZ3plbG9uZw%3D%3D`。
 - `SMS_TIME` 固定为 `0`；官方日志中即使 `topsecsveee=60`，该字段仍为 0。
 - `HASH`/`S_CODE` 必须与密码 `user_pswd` 请求一致；客户端在同一个 `AuthClient` 内复用。
 - 请求不带 `sv_un`，但必须复用 `-40039` 响应种下的 `topsecsvkkk`、`topsecsvaaa`、`topsecsvccc`、`topsecsvddd`、`topsecsveee`、`topsecsvfff`。
@@ -182,10 +185,10 @@ POST /vone/find_pswd
 Content-Type: application/x-www-form-urlencoded
 Cookie: topsecsvkkk=...; topsecsvddd=...
 
-U=<账号>&Base64_U=<账号的 Base64>&P=<明文新密码>&SMS=<动态验证码>&S_Gid=
+U=<账号>&Base64_U=<账号的 Base64>&P=<Base64(新密码)>&SMS=<动态验证码>&S_Gid=
 ```
 
-原前端会先用 RSA 加密 `pwd`，原生层在发出 HTTP 前解密，所以最终 `P` 是**明文新密码**。第二步必须复用第一步响应下发的 Cookie。
+官方日志示例格式：`U=demo&Base64_U=ZGVtbw%3D%3D&P=<Base64(新密码)>&SMS=<动态验证码>&S_Gid=`。`U` 保持明文，`Base64_U` 与 `P` 都是账号/新密码的 Base64（URL 编码）。第二步必须复用第一步响应下发的 Cookie。
 
 第二步 `Ret=-40052/-40071`（或 `ErrMsg` 含「找回密码失败」）在实测中对应新密码与旧密码相同；本客户端显示「新密码不能与旧密码一致」，其余策略错误仍优先展示网关 `ErrMsg`。第二步 `Ret=-40230` 同样表示重置成功（原客户端也在该分支关闭弹窗），不能按错误处理。
 
@@ -196,12 +199,12 @@ U=<账号>&Base64_U=<账号的 Base64>&P=<明文新密码>&SMS=<动态验证码>
 ```
 POST /vone/chg_pwd
 Content-Type: application/x-www-form-urlencoded;charset=UTF-8
-Cookie: ...; sv_un=<账号>; seccheck=0; topafasfasfassession_id=<会话ID>
+Cookie: ...; sv_un=<Base64(账号)>; seccheck=0; topafasfassession_id=<会话ID>
 
-P1=<明文原密码>&P2=<明文新密码>
+P1=<Base64(原密码)>&P2=<Base64(新密码)>
 ```
 
-已登录会话下请求体**只发送 `P1/P2`**；`U` 只用于 Cookie 的 `sv_un`（明文账号）。只有无会话的首登改密分支才在请求体追加 `U=<账号>`。原前端用 RSA 加密 P1/P2，原生层在发出 HTTP 前解密，因此最终 `P1/P2` 是**明文原/新密码**。返回 `Ret=0` 表示修改成功；`-40226` 时原程序直接展示网关 `ErrMsg` 中的动态密码策略（长度、字符集、历史密码限制等）。新旧密码相同时网关返回 `-40037`（修改密码失败）或 `-40129`（新密码与旧密码不能相同），原前端在提交前就用 `difPassword` 拦截；本客户端同时做前端预检与返回码映射，统一提示「新密码不能与旧密码一致」。
+已登录会话下请求体**只发送 `P1/P2`**；`U` 只用于 Cookie 的 `sv_un`（账号 Base64，例如 `sv_un=ZGVtbw==`）。只有无会话的首登改密分支才在请求体追加 `U=<Base64(账号)>`。官方客户端 3.6.6.19 的 `P1/P2` 是**原/新密码的 Base64**（例如 `P1=<Base64(原密码)>&P2=<Base64(新密码)>`），不是明文。返回 `Ret=0` 表示修改成功；`-40226` 时原程序直接展示网关 `ErrMsg` 中的动态密码策略（长度、字符集、历史密码限制等）。新旧密码相同时网关返回 `-40037`（修改密码失败）或 `-40129`（新密码与旧密码不能相同），原前端在提交前就用 `difPassword` 拦截；本客户端同时做前端预检与返回码映射，统一提示「新密码不能与旧密码一致」。
 
 ### 2.7.1 密码状态与到期
 
@@ -328,7 +331,7 @@ TCP/TLS 连接 gateway:port
 | 虚拟网卡 | NDIS 小端口驱动 `TopvDev.sys`（`\\.\TOPVNIC`，重叠 I/O） | Wintun（微软签名驱动，用户态 DLL） |
 | 路由来源 | 按 ACL 目标网段逐条注入（`na_client.exe`） | ACL 目标 + 资源 `ip/mask` 并集；不使用 `route_list` |
 | 进程模型 | Electron 界面 + `sv_service.exe`(LocalSystem) + `na_client.exe`，共享内存传 socket 句柄 | 单进程，全部逻辑在应用内 |
-| 登录/改密字段 | 前端 RSA/Base64 后由原生层解密 | 直接发明文（网关要的就是明文） |
+| 登录/改密字段 | 前端 RSA/Base64 后由原生层解密 | 账号/密码按官方 3.6.6.19 格式 Base64 编码后提交 |
 | 证书校验 | 不校验证书链、不发 SNI | 相同（兼容性要求） |
 | 国密 | 支持 SM2/SM4（`sm2plusvone` 网关） | 未实现，仅支持 `ngvone` |
 

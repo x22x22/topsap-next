@@ -219,7 +219,7 @@ Frontend and backend talk over Tauri IPC — no TCP ports listened on
 ```
 
 - **Certificate validation is skipped (protocol requirement)** — Gateway certificates are usually self-signed or expired, and the official client does not validate them either; this client also skips chain validation and sends no SNI. That means TLS cannot identify a man-in-the-middle — **use it only on trusted networks** and verify the gateway address through another channel.
-- **Credentials travel in plaintext inside TLS** — The gateway requires plaintext `U/P`; the security boundary is the TLS channel itself.
+- **Credentials are Base64-encoded inside TLS** — The gateway expects `U/P` as Base64 of the username and password; Base64 is only an encoding, and the security boundary is the TLS channel itself.
 - **Administrator rights are required** — Unavoidable for changing system network configuration; the app only touches routes, DNS and the virtual adapter.
 - **Password storage** — Windows Credential Manager first; falls back to a machine-bound AES-256-GCM file. Passwords, captchas and `session_id` never enter logs or events; the abnormal-exit session marker stores only the gateway, port and `session_id`, encrypted with the same machine-bound AES-256-GCM key.
 - **Portable layout on Windows** — Settings, logs and WebView2 data live next to the executable: `config\` (settings, connection profiles, credential fallback, abnormal-exit session marker), `data\logs\` (`client.log`) and `webview\` (WebView2 user data, containing `EBWebView`). Keep the app in a writable folder; upgrades and reinstalls reuse these directories, so delete them manually for a full cleanup.
