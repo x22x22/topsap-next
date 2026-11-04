@@ -1,5 +1,6 @@
 //! Unix TUN 设备：通过 tun crate 创建三层接口，使用 poll 等待可读。
 //!
+//! 设备 fd 统一设为非阻塞，避免读线程卡在 read 上无法响应取消。
 //! macOS 默认通过特权 helper 创建 utun 并把文件描述符传回本进程；
 //! 仅当 helper 不可用且本进程已是 root 时才回退到本地创建。
 
@@ -105,6 +106,9 @@ impl TunDevice {
                 "创建 TUN 设备失败：{err}（请检查特权 helper 或 root 权限）"
             ))
         })?;
+        device
+            .set_nonblock()
+            .map_err(|err| TunError::Adapter(format!("配置 TUN 非阻塞模式失败：{err}")))?;
         let fd = device.as_raw_fd();
         let actual = device.tun_name().unwrap_or_else(|_| name.to_string());
 
@@ -125,6 +129,9 @@ impl TunDevice {
         config.raw_fd(fd).close_fd_on_drop(true).mtu(1400);
         let device = tun::create(&config)
             .map_err(|err| TunError::Adapter(format!("接管 TUN 失败：{err}")))?;
+        device
+            .set_nonblock()
+            .map_err(|err| TunError::Adapter(format!("配置 TUN 非阻塞模式失败：{err}")))?;
         Ok(Self {
             _device: device,
             fd,

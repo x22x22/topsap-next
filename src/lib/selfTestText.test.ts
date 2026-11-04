@@ -29,6 +29,22 @@ describe("localizeSelfTestDetail", () => {
     );
   });
 
+  it("翻译 Linux 残留清理结果", () => {
+    expect(localizeSelfTestDetail("已删除遗留的 topsap0 虚拟网卡")).toBe(
+      "Removed the leftover topsap0 TUN interface",
+    );
+    expect(localizeSelfTestDetail("未发现遗留的 TUN 虚拟网卡")).toBe(
+      "No leftover TUN interface was found",
+    );
+    expect(
+      localizeSelfTestDetail(
+        "topsap0 仍存在；请退出其他 TopSAP 实例，或执行 sudo ip link del topsap0 后重试",
+      ),
+    ).toBe(
+      "topsap0 is still present. Quit other TopSAP instances, or run sudo ip link del topsap0 and retry.",
+    );
+  });
+
   it("未匹配的句子原样返回", () => {
     expect(localizeSelfTestDetail("未知错误")).toBe("未知错误");
   });

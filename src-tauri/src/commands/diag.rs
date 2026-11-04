@@ -12,6 +12,11 @@ use crate::tun::selftest::{self, StepStatus};
 use crate::AppState;
 
 static SELF_TEST_RUNNING: AtomicBool = AtomicBool::new(false);
+
+/// 供连接命令判断是否与自检冲突
+pub fn self_test_running() -> bool {
+    SELF_TEST_RUNNING.load(Ordering::SeqCst)
+}
 const SELF_TEST_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// 自检结束后恢复运行标记，超时或 panic 都不会永久卡住
@@ -30,6 +35,9 @@ pub async fn run_self_test(
 ) -> Result<SelfTestDto, String> {
     if state.engine.is_connected() {
         return Err("请先断开连接后再运行自检，避免误删正在使用的虚拟网卡".to_string());
+    }
+    if state.engine.is_busy() || state.engine.needs_cleanup() {
+        return Err("请先等待当前连接流程结束或断开连接后再运行自检".to_string());
     }
     if SELF_TEST_RUNNING.swap(true, Ordering::SeqCst) {
         return Err("自检正在进行中，请稍候".to_string());

@@ -19,6 +19,11 @@ const DETAIL_EN: Array<[RegExp, string]> = [
   [/^已删除遗留的 TopSAP 虚拟网卡$/, "Removed the leftover TopSAP virtual adapter"],
   [/^未发现遗留的 TopSAP 虚拟网卡$/, "No leftover TopSAP virtual adapter was found"],
   [/^已重置遗留的 TopSAP 网卡状态$/, "Reset the state of the leftover TopSAP adapter"],
+  [/^已删除遗留的 topsap0 虚拟网卡$/, "Removed the leftover topsap0 TUN interface"],
+  [/^未发现遗留的 TUN 虚拟网卡$/, "No leftover TUN interface was found"],
+  [/^删除 topsap0 失败：(.+)$/, "Failed to delete topsap0: $1"],
+  [/^删除 topsap0 失败$/, "Failed to delete topsap0"],
+  [/^topsap0 仍存在$/, "topsap0 is still present"],
   [/^系统 TUN 随进程关闭自动释放，无需清理$/,
     "The system TUN device is released when the process exits; no cleanup is needed"],
   [/^删除虚拟网卡失败：网卡会话已存在或网卡状态异常，请清理残留网卡后重试（Win32 1247）；请先断开连接或手动删除网卡后重试$/,
@@ -51,6 +56,12 @@ export function localizeSelfTestDetail(detail: string): string {
   if (currentLanguage() === "zh") return detail;
   const packet = detail.match(/^收到报文：(.+)$/);
   if (packet) return `Packet received: ${localizeSelfTestDetail(packet[1])}`;
+  const retry = detail.match(
+    /^(.+)；请退出其他 TopSAP 实例，或执行 sudo ip link del topsap0 后重试$/,
+  );
+  if (retry) {
+    return `${localizeSelfTestDetail(retry[1])}. Quit other TopSAP instances, or run sudo ip link del topsap0 and retry.`;
+  }
   for (const [pattern, replacement] of DETAIL_EN) {
     if (pattern.test(detail)) return detail.replace(pattern, replacement);
   }

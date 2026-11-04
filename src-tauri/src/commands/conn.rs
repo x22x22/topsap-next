@@ -19,6 +19,10 @@ pub async fn connect(
     let password = form.password.clone();
     let remember = form.remember;
 
+    if crate::commands::diag::self_test_running() {
+        return Err("网卡自检正在进行中，请稍候再连接".to_string());
+    }
+
     let summary = state.engine.connect(form).await?;
 
     // 连接成功后才落盘设置与凭据

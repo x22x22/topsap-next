@@ -55,6 +55,15 @@ describe("localizeError", () => {
     );
   });
 
+  it("翻译自检与连接的互斥提示", () => {
+    expect(localizeError("网卡自检正在进行中，请稍候再连接")).toBe(
+      "The adapter self-test is running. Wait for it to finish before connecting.",
+    );
+    expect(localizeError("请先等待当前连接流程结束或断开连接后再运行自检")).toBe(
+      "Wait for the current connection attempt to finish, or disconnect, before running the self-test.",
+    );
+  });
+
   it("翻译会话与连接状态错误", () => {
     expect(localizeError("已有连接操作正在进行，请稍候")).toBe(
       "A connection operation is already in progress. Please wait.",

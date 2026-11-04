@@ -19,6 +19,9 @@ pub const TEST_ROUTE_DEST: &str = "10.98.0.0";
 pub const TEST_ROUTE_MASK: &str = "255.255.0.0";
 pub const TEST_PING_TARGET: &str = "10.98.0.5";
 
+/// 单次 poll 后最多连续读取的报文数，避免持续流量饿死外层取消检查
+const MAX_PACKETS_PER_POLL: usize = 32;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StepStatus {
     Ok,
@@ -55,6 +58,15 @@ impl SelfTestReport {
             total,
             ok,
         }
+    }
+}
+
+/// 自检 future 被超时取消时也要停掉读线程，避免 tun fd 泄漏
+struct ReaderStopGuard(Arc<AtomicBool>);
+
+impl Drop for ReaderStopGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Relaxed);
     }
 }
 
@@ -151,7 +163,23 @@ pub async fn run<F: FnMut(&SelfTestStep)>(dll_path: &Path, on_step: F) -> SelfTe
             }
         }
     }
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
+    {
+        match reset_unix_adapter().await {
+            Ok(Some(detail)) => b.ok("清理上次自检残留", detail),
+            Ok(None) => b.info("清理上次自检残留", "未发现遗留的 TUN 虚拟网卡"),
+            Err(err) => {
+                b.fail(
+                    "清理上次自检残留",
+                    format!(
+                        "{err}；请退出其他 TopSAP 实例，或执行 sudo ip link del {ADAPTER_NAME} 后重试"
+                    ),
+                );
+                return b.finish();
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
     b.info("清理上次自检残留", "系统 TUN 随进程关闭自动释放，无需清理");
 
     let device = match TunDevice::open_for(dll_path, ADAPTER_NAME, TEST_VIP, TEST_MASK) {
@@ -197,8 +225,9 @@ pub async fn run<F: FnMut(&SelfTestStep)>(dll_path: &Path, on_step: F) -> SelfTe
         );
     }
 
-    // 读线程：Wintun 的等待句柄是阻塞语义，放在独立线程避免占用 tokio worker
+    // 读线程：独立线程轮询网卡，避免占用 tokio worker
     let running = Arc::new(AtomicBool::new(true));
+    let _stop_guard = ReaderStopGuard(running.clone());
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(128);
     let reader_device = device.clone();
     let reader_running = running.clone();
@@ -207,8 +236,11 @@ pub async fn run<F: FnMut(&SelfTestStep)>(dll_path: &Path, on_step: F) -> SelfTe
             if !reader_device.wait_readable(200) {
                 continue;
             }
-            while let Some(packet) = reader_device.recv_packet() {
-                if tx.blocking_send(packet).is_err() {
+            for _ in 0..MAX_PACKETS_PER_POLL {
+                let Some(packet) = reader_device.recv_packet() else {
+                    break;
+                };
+                if tx.try_send(packet).is_err() {
                     return;
                 }
             }
@@ -318,6 +350,36 @@ async fn reset_windows_adapter() -> Result<Option<String>, String> {
     } else {
         Ok(None)
     }
+}
+
+/// 检查并删除上次自检遗留的 Linux TUN 网卡；返回 Some(detail) 表示执行过清理。
+#[cfg(target_os = "linux")]
+async fn reset_unix_adapter() -> Result<Option<String>, String> {
+    let current = shell::run("ip", &["link", "show", ADAPTER_NAME]).await;
+    if !output_has_interface(current.ok, &current.stdout) {
+        return Ok(None);
+    }
+
+    let deleted = shell::run("ip", &["link", "del", ADAPTER_NAME]).await;
+    if !deleted.ok {
+        let detail = deleted.text().trim().to_string();
+        return Err(if detail.is_empty() {
+            format!("删除 {ADAPTER_NAME} 失败")
+        } else {
+            format!("删除 {ADAPTER_NAME} 失败：{detail}")
+        });
+    }
+
+    let after = shell::run("ip", &["link", "show", ADAPTER_NAME]).await;
+    if output_has_interface(after.ok, &after.stdout) {
+        return Err(format!("{ADAPTER_NAME} 仍存在"));
+    }
+    Ok(Some(format!("已删除遗留的 {ADAPTER_NAME} 虚拟网卡")))
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn output_has_interface(ok: bool, stdout: &str) -> bool {
+    ok && !stdout.trim().is_empty()
 }
 
 async fn cleanup(net: &mut NetConfig, _device: &TunDevice) {
@@ -437,6 +499,16 @@ mod tests {
         assert!(describe_packet(&v6).contains("IPv6"));
 
         assert_eq!(describe_packet(&[]), "空报文");
+    }
+
+    #[test]
+    fn 网卡存在判断_区分命令失败与空输出() {
+        assert!(output_has_interface(
+            true,
+            "5: topsap0: <POINTOPOINT,NOARP,UP> mtu 1400"
+        ));
+        assert!(!output_has_interface(true, " \n"));
+        assert!(!output_has_interface(false, ""));
     }
 
     #[test]

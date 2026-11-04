@@ -220,6 +220,12 @@ impl Engine {
         self.lock().phase.connected()
     }
 
+    /// 是否处于连接流程中（含重连），用于拒绝并发的建卡操作
+    pub fn is_busy(&self) -> bool {
+        let inner = self.lock();
+        inner.phase.busy() || inner.phase == Phase::Reconnecting
+    }
+
     /// 是否存在需要清理的系统资源（网卡 / 隧道 / 路由账本）
     pub fn needs_cleanup(&self) -> bool {
         let inner = self.lock();
