@@ -368,6 +368,13 @@ async fn reset_unix_adapter() -> Result<Option<String>, String> {
         return Ok(None);
     }
 
+    let address = shell::run("ip", &["addr", "show"]).await;
+    if !interface_has_ipv4(&address.stdout, ADAPTER_NAME, TEST_VIP) {
+        return Err(format!(
+            "{ADAPTER_NAME} 存在但不是自检残留（未找到 {TEST_VIP}）"
+        ));
+    }
+
     let deleted = shell::run("ip", &["link", "del", ADAPTER_NAME]).await;
     if !deleted.ok {
         let detail = deleted.text().trim().to_string();
@@ -388,6 +395,35 @@ async fn reset_unix_adapter() -> Result<Option<String>, String> {
 #[cfg(any(target_os = "linux", test))]
 fn output_has_interface(ok: bool, stdout: &str) -> bool {
     ok && !stdout.trim().is_empty()
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn interface_has_ipv4(text: &str, ifname: &str, ip: &str) -> bool {
+    let mut in_target = false;
+    for line in text.lines() {
+        if !line.starts_with(' ') && !line.starts_with('\t') {
+            in_target = line
+                .split(':')
+                .nth(1)
+                .map(str::trim)
+                .is_some_and(|name| name == ifname);
+        }
+        if !in_target {
+            continue;
+        }
+        let Some(rest) = line.trim_start().strip_prefix("inet ") else {
+            continue;
+        };
+        if rest
+            .split_whitespace()
+            .next()
+            .and_then(|addr| addr.split('/').next())
+            == Some(ip)
+        {
+            return true;
+        }
+    }
+    false
 }
 
 async fn cleanup(net: &mut NetConfig, _device: &TunDevice) {
@@ -517,6 +553,20 @@ mod tests {
         ));
         assert!(!output_has_interface(true, " \n"));
         assert!(!output_has_interface(false, ""));
+    }
+
+    #[test]
+    fn 解析网卡地址_只匹配目标网卡与目标_ipv4() {
+        let text = concat!(
+            "2: eth0: <BROADCAST,MULTICAST,UP> mtu 1500\n",
+            "    inet 10.0.0.2/24 scope global eth0\n",
+            "5: topsap0: <POINTOPOINT,NOARP,UP> mtu 1400\n",
+            "    inet 10.99.99.2/24 scope global topsap0\n",
+            "    inet6 fe80::1/64 scope link\n",
+        );
+        assert!(interface_has_ipv4(text, "topsap0", "10.99.99.2"));
+        assert!(!interface_has_ipv4(text, "topsap0", "10.99.99.3"));
+        assert!(!interface_has_ipv4(text, "eth0", "10.99.99.2"));
     }
 
     #[test]
