@@ -2,7 +2,7 @@
 //!
 //! 不接触网关，几秒内结束。验证顺序：
 //! 管理员权限 → 定位 DLL → 建卡/会话 → 配置 IP → 回读 → 注入测试路由
-//! → 写路径（构造 ICMP 写入网卡）→ 读路径（收到任意 IP 报文）→ 跨网段投递（INFO）
+//! → 写路径（构造 ICMP 写入网卡）→ 读路径（本机回包经测试路由读回）→ 跨网段投递（INFO）
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -21,6 +21,12 @@ pub const TEST_PING_TARGET: &str = "10.98.0.5";
 
 /// 单次 poll 后最多连续读取的报文数，避免持续流量饿死外层取消检查
 const MAX_PACKETS_PER_POLL: usize = 32;
+
+/// 接收方向测试的报文源地址：必须落在测试路由网段内，回包才能按测试路由回到网卡
+const ECHO_SOURCE: [u8; 4] = [10, 98, 0, 5];
+
+/// 接收方向测试的报文目的地址（本机 VIP）：命中本机地址才会触发系统回包
+const ECHO_TARGET: [u8; 4] = [10, 99, 99, 2];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StepStatus {
@@ -256,11 +262,14 @@ pub async fn run<F: FnMut(&SelfTestStep)>(dll_path: &Path, on_step: F) -> SelfTe
     });
     b.ok("启动读循环", "已就绪");
 
-    let echo = build_icmp_echo_request([10, 99, 99, 2], [10, 98, 0, 5], 0x5447, 1);
+    let echo = build_icmp_echo_request(ECHO_SOURCE, ECHO_TARGET, 0x5447, 1);
     if device.send_packet(&echo) {
         b.ok(
             "发送方向（应用 → 网卡）",
-            format!("已写入 {} 字节 ICMP 请求", echo.len()),
+            format!(
+                "已向网卡注入 {} 字节 ICMP 请求（{TEST_PING_TARGET} → {TEST_VIP}）",
+                echo.len()
+            ),
         );
     } else {
         b.fail("发送方向（应用 → 网卡）", "写入失败，网卡会话不可用");
@@ -269,12 +278,12 @@ pub async fn run<F: FnMut(&SelfTestStep)>(dll_path: &Path, on_step: F) -> SelfTe
     match tokio::time::timeout(Duration::from_secs(3), rx.recv()).await {
         Ok(Some(packet)) => b.ok(
             "接收方向（网卡 → 应用）",
-            format!("收到报文：{}", describe_packet(&packet)),
+            format!("收到系统回包：{}", describe_packet(&packet)),
         ),
         Ok(None) => b.fail("接收方向（网卡 → 应用）", "读循环提前结束"),
         Err(_) => b.fail(
             "接收方向（网卡 → 应用）",
-            "3 秒内未收到任何报文；系统可能未向该网卡投递流量",
+            "3 秒内未收到系统回包；请检查测试路由是否生效、网卡读路径是否可用",
         ),
     }
 
@@ -528,6 +537,27 @@ mod tests {
         // 总长度字段与实际一致
         let total = u16::from_be_bytes([pkt[2], pkt[3]]) as usize;
         assert_eq!(total, pkt.len());
+    }
+
+    #[test]
+    fn 接收方向_以本机地址触发回包() {
+        assert_eq!(
+            format!(
+                "{}.{}.{}.{}",
+                ECHO_SOURCE[0], ECHO_SOURCE[1], ECHO_SOURCE[2], ECHO_SOURCE[3]
+            ),
+            TEST_PING_TARGET
+        );
+        assert_eq!(
+            format!(
+                "{}.{}.{}.{}",
+                ECHO_TARGET[0], ECHO_TARGET[1], ECHO_TARGET[2], ECHO_TARGET[3]
+            ),
+            TEST_VIP
+        );
+        let pkt = build_icmp_echo_request(ECHO_SOURCE, ECHO_TARGET, 1, 1);
+        assert_eq!(pkt[16..20], ECHO_TARGET, "目的地址必须是本机 VIP");
+        assert_eq!(pkt[12..16], ECHO_SOURCE, "源地址必须落在测试路由网段");
     }
 
     #[test]
