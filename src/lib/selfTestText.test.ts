@@ -84,6 +84,21 @@ describe("localizeSelfTestDetail", () => {
     );
   });
 
+  it("未匹配的句子回退到后端错误映射", () => {
+    expect(
+      localizeSelfTestDetail(
+        "配置网卡地址失败（当前：无地址）；请确认特权 helper 已安装，或以 root/sudo 运行",
+      ),
+    ).toBe(
+      "Failed to configure the adapter address (current: no address). Confirm the privileged helper is installed, or run as root/sudo.",
+    );
+    expect(
+      localizeSelfTestDetail("创建虚拟网卡失败：拒绝访问，需要管理员权限运行（Win32 5）"),
+    ).toBe(
+      "Failed to create the virtual adapter: access denied; administrator privileges are required (Win32 5)",
+    );
+  });
+
   it("未匹配的句子原样返回", () => {
     expect(localizeSelfTestDetail("未知错误")).toBe("未知错误");
   });

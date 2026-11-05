@@ -33,6 +33,32 @@ function localizeReason(reason: string): string {
   return reason;
 }
 
+const WIN32_HINTS: Array<[string, string]> = [
+  ["拒绝访问，需要管理员权限运行", "access denied; administrator privileges are required"],
+  ["无法连接到设备，驱动可能未加载", "cannot connect to the device; the driver may not be loaded"],
+  ["参数错误", "invalid parameter"],
+  ["驱动尚未安装，请重新安装客户端", "the driver is not installed; reinstall the client"],
+  ["找不到设备元素", "device element not found"],
+  [
+    "网卡会话已存在或网卡状态异常，请清理残留网卡后重试",
+    "the adapter session already exists or the adapter is in a bad state; clean up the leftover adapter and retry",
+  ],
+  ["未知 Win32 错误", "unknown Win32 error"],
+];
+
+function localizeWin32Hint(hint: string): string {
+  const hit = WIN32_HINTS.find(([chinese]) => chinese === hint);
+  return hit ? hit[1] : hint;
+}
+
+function localizeAddress(value: string): string {
+  return value === "无地址" ? "no address" : value;
+}
+
+function localizeAttempts(value: string): string {
+  return value.replace(/第(\d+)轮/g, "round $1").replace(/，/g, ", ");
+}
+
 export function localizeError(message: string): string {
   if (currentLanguage() === "zh") return message;
   let text = message;
@@ -50,6 +76,30 @@ export function localizeError(message: string): string {
   text = text.replace(
     /^TLS 握手失败：(.+)$/,
     (_match, reason: string) => `TLS handshake failed: ${localizeReason(reason)}`,
+  );
+  text = text.replace(
+    /^配置网卡地址失败（当前：(.+)）；(请确认特权 helper 已安装，或以 root\/sudo 运行|请以 root 运行（sudo \/usr\/bin\/topsap-client）)$/,
+    (_match, current: string, hint: string) => {
+      const action = hint.startsWith("请确认")
+        ? "Confirm the privileged helper is installed, or run as root/sudo."
+        : "Run the app as root with sudo /usr/bin/topsap-client.";
+      return `Failed to configure the adapter address (current: ${localizeAddress(current)}). ${action}`;
+    },
+  );
+  text = text.replace(
+    /^设置网卡地址失败（当前：(.+)；(.+)）$/,
+    (_match, current: string, attempts: string) =>
+      `Failed to set the adapter address (current: ${localizeAddress(current)}; ${localizeAttempts(attempts)})`,
+  );
+  text = text.replace(
+    /^(创建虚拟网卡失败|启动网卡会话失败)：(.+)（Win32 (\d+)）$/,
+    (_match, action: string, hint: string, code: string) => {
+      const label =
+        action === "创建虚拟网卡失败"
+          ? "Failed to create the virtual adapter"
+          : "Failed to start the adapter session";
+      return `${label}: ${localizeWin32Hint(hint)} (Win32 ${code})`;
+    },
   );
 
   const fixed: Array<[RegExp, string]> = [
@@ -124,13 +174,22 @@ export function localizeError(message: string): string {
       "Failed to create the TUN device: adapter $1 is already in use, likely left by a previous self-test or connection. Quit all TopSAP instances, or run sudo ip link del $1 and retry."],
     [/^创建 TUN 设备失败：(.+)（请检查特权 helper 或 root 权限）$/,
       "Failed to create the TUN device: $1 (check the privileged helper or root access)"],
-    [/^配置网卡地址失败（当前：(.+)）；请以 root 运行（sudo \/usr\/bin\/topsap-client）$/,
-      "Failed to configure the adapter address (current: $1). Run the app as root with sudo /usr/bin/topsap-client."],
+    [/^创建 TUN 设备失败：(.+)（请检查 \/dev\/net\/tun 是否可用以及运行权限）$/,
+      "Failed to create the TUN device: $1 (check that /dev/net/tun is available and the run permission)"],
+    [/^创建 TUN 设备失败：(.+)$/, "Failed to create the TUN device: $1"],
+    [/^配置 TUN 非阻塞模式失败：(.+)$/, "Failed to configure the TUN non-blocking mode: $1"],
+    [/^接管 TUN 失败：(.+)$/, "Failed to take over the TUN device: $1"],
+    [/^特权 helper 未运行，请重新启动应用以安装或修复 helper$/,
+      "The privileged helper is not running. Restart the app to install or repair it."],
+    [/^未找到虚拟网卡「(.+)」，驱动可能尚未就绪$/,
+      'Adapter "$1" was not found; the driver may not be ready'],
+    [/^掩码「(.+)」不是合法的连续掩码$/, 'Mask "$1" is not a valid contiguous mask'],
+    [/^读取 hosts 失败：(.+)$/, "Failed to read hosts: $1"],
+    [/^写入 hosts 失败：(.+)$/, "Failed to write hosts: $1"],
     [/^路由注入全部失败，内网流量无法进入隧道$/,
       "All route injections failed; intranet traffic cannot enter the tunnel."],
     [/^所有线路均不可用$/, "No line is available."],
-    [/^虚拟网卡已释放$/, "The virtual adapter has been released."],
-    [/^登录会话已失效，请重新连接后再修改密码$/,
+    [/^虚拟网卡已释放$/, "The virtual adapter has been released."],    [/^登录会话已失效，请重新连接后再修改密码$/,
       "The session has expired. Reconnect before changing the password."],
     [/^无法确定当前登录账号$/, "Unable to determine the signed-in account."],
     [/^请先连接网关后再修改密码$/, "Connect to the gateway before changing the password."],

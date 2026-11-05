@@ -1,6 +1,7 @@
 /** 网卡自检明细的英文映射：后端明细为中文，英文模式下按已知句式翻译。 */
 
 import { currentLanguage } from "./i18n";
+import { localizeError } from "./errorText";
 
 const DETAIL_EN: Array<[RegExp, string]> = [
   [/^已提权$/, "Elevated"],
@@ -73,5 +74,5 @@ export function localizeSelfTestDetail(detail: string): string {
   for (const [pattern, replacement] of DETAIL_EN) {
     if (pattern.test(detail)) return detail.replace(pattern, replacement);
   }
-  return detail;
+  return localizeError(detail);
 }

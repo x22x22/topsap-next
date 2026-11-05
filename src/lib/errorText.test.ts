@@ -91,6 +91,38 @@ describe("localizeError", () => {
     expect(localizeError("所有线路均不可用")).toBe("No line is available.");
   });
 
+  it("翻译 macOS helper 与网卡配置失败", () => {
+    expect(
+      localizeError("特权 helper 未运行，请重新启动应用以安装或修复 helper"),
+    ).toBe(
+      "The privileged helper is not running. Restart the app to install or repair it.",
+    );
+    expect(
+      localizeError(
+        "配置网卡地址失败（当前：无地址）；请确认特权 helper 已安装，或以 root/sudo 运行",
+      ),
+    ).toBe(
+      "Failed to configure the adapter address (current: no address). Confirm the privileged helper is installed, or run as root/sudo.",
+    );
+    expect(localizeError("未找到虚拟网卡「TopSAP」，驱动可能尚未就绪")).toBe(
+      'Adapter "TopSAP" was not found; the driver may not be ready',
+    );
+  });
+
+  it("翻译 Windows 网卡与 hosts 错误", () => {
+    expect(localizeError("创建虚拟网卡失败：拒绝访问，需要管理员权限运行（Win32 5）")).toBe(
+      "Failed to create the virtual adapter: access denied; administrator privileges are required (Win32 5)",
+    );
+    expect(
+      localizeError("设置网卡地址失败（当前：无地址；第1轮 netsh=fail，第2轮 powershell=fail）"),
+    ).toBe(
+      "Failed to set the adapter address (current: no address; round 1 netsh=fail, round 2 powershell=fail)",
+    );
+    expect(localizeError("读取 hosts 失败：permission denied")).toBe(
+      "Failed to read hosts: permission denied",
+    );
+  });
+
   it("未匹配的文案保持原样", () => {
     expect(localizeError("未知的新错误")).toBe("未知的新错误");
   });
