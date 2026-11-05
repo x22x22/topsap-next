@@ -43,10 +43,12 @@ const DETAIL_EN: Array<[RegExp, string]> = [
   [/^(.+) 已生效$/, "$1 is active"],
   [/^(.+) 未生效$/, "$1 is not active"],
   [/^已就绪$/, "Ready"],
+  [/^已向网卡注入 (\d+) 字节 ICMP 请求（(.+) → (.+)）$/,
+    "Injected a $1-byte ICMP request into the adapter ($2 → $3)"],
   [/^写入失败，网卡会话不可用$/, "Write failed; the adapter session is unavailable"],
   [/^读循环提前结束$/, "The read loop ended early"],
-  [/^3 秒内未收到任何报文；系统可能未向该网卡投递流量$/,
-    "No packet was received within 3 seconds; the system may not be routing traffic to this adapter"],
+  [/^3 秒内未收到系统回包；请检查测试路由是否生效、网卡读路径是否可用$/,
+    "No system reply was received within 3 seconds; check that the test route is active and the adapter read path works"],
   [/^ping (.+) 成功，系统已把包交给网卡$/,
     "ping $1 succeeded; the system delivered packets to the adapter"],
   [/^ping (.+) 未通（同网段无对端属正常，不影响真实连接）$/,
@@ -60,8 +62,8 @@ const DETAIL_EN: Array<[RegExp, string]> = [
 /** 翻译自检步骤明细；中文模式与未匹配的句子原样返回 */
 export function localizeSelfTestDetail(detail: string): string {
   if (currentLanguage() === "zh") return detail;
-  const packet = detail.match(/^收到报文：(.+)$/);
-  if (packet) return `Packet received: ${localizeSelfTestDetail(packet[1])}`;
+  const reply = detail.match(/^收到系统回包：(.+)$/);
+  if (reply) return `System reply received: ${localizeSelfTestDetail(reply[1])}`;
   const retry = detail.match(
     /^(.+)；请退出其他 TopSAP 实例，或执行 sudo ip link del topsap0 后重试$/,
   );

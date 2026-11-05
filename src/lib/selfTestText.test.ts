@@ -24,8 +24,20 @@ describe("localizeSelfTestDetail", () => {
     expect(localizeSelfTestDetail("10.98.0.0/255.255.0.0 已生效")).toBe(
       "10.98.0.0/255.255.0.0 is active",
     );
-    expect(localizeSelfTestDetail("收到报文：IPv6 报文（64 字节）")).toBe(
-      "Packet received: IPv6 packet (64 bytes)",
+    expect(localizeSelfTestDetail("收到系统回包：IPv6 报文（64 字节）")).toBe(
+      "System reply received: IPv6 packet (64 bytes)",
+    );
+    expect(
+      localizeSelfTestDetail(
+        "已向网卡注入 44 字节 ICMP 请求（10.98.0.5 → 10.99.99.2）",
+      ),
+    ).toBe("Injected a 44-byte ICMP request into the adapter (10.98.0.5 → 10.99.99.2)");
+    expect(
+      localizeSelfTestDetail(
+        "3 秒内未收到系统回包；请检查测试路由是否生效、网卡读路径是否可用",
+      ),
+    ).toBe(
+      "No system reply was received within 3 seconds; check that the test route is active and the adapter read path works",
     );
   });
 
