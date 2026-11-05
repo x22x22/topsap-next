@@ -66,14 +66,14 @@ mod tests {
         assert!(allowed_networksetup(&args(&[
             "setdnsservers",
             "Wi-Fi",
-            "10.22.50.5",
-            "fe80::1"
+            "198.51.100.5",
+            "2001:db8::1"
         ])));
         assert!(allowed_networksetup(&args(&[
             "-setproxybypassdomains",
             "Wi-Fi",
             "*.sunline.cn",
-            "10.0.0.1"
+            "198.51.100.1"
         ])));
         assert!(allowed_networksetup(&args(&[
             "-setproxybypassdomains",
@@ -87,7 +87,7 @@ mod tests {
         assert!(!allowed_networksetup(&args(&[
             "-setwebproxy",
             "Wi-Fi",
-            "10.0.0.1",
+            "198.51.100.1",
             "8080"
         ])));
         assert!(!allowed_networksetup(&args(&["-setproxybypassdomains"])));

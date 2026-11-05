@@ -233,9 +233,9 @@ mod tests {
     fn 解析_dns_列表() {
         assert_eq!(
             parse_dns_servers(
-                "8.8.8.8\n2001:4860:4860::8888\nfe80::1%en0\nThere aren't any DNS Servers set on Wi-Fi.\n"
+                "192.0.2.53\n2001:db8::53\n2001:db8::1%en0\nThere aren't any DNS Servers set on Wi-Fi.\n"
             ),
-            vec!["8.8.8.8", "2001:4860:4860::8888", "fe80::1"]
+            vec!["192.0.2.53", "2001:db8::53", "2001:db8::1"]
         );
         assert!(parse_dns_servers("There aren't any DNS Servers set on Wi-Fi.\n").is_empty());
     }
@@ -245,8 +245,8 @@ mod tests {
         let text = "DNS configuration\n\n\
                     resolver #1\n\
                     \x20 search domain[0] : lan\n\
-                    \x20 nameserver[0] : 172.20.10.1\n\
-                    \x20 nameserver[1] : fe80::f01:c7ff:fef2:2764\n\
+                    \x20 nameserver[0] : 192.0.2.53\n\
+                    \x20 nameserver[1] : 2001:db8::53\n\
                     \x20 if_index : 14 (en0)\n\n\
                     resolver #2\n\
                     \x20 domain : local\n\
@@ -254,7 +254,7 @@ mod tests {
                     \x20 if_index : 5 (utun4)\n";
         assert_eq!(
             parse_scutil_dns(text, "en0"),
-            vec!["172.20.10.1", "fe80::f01:c7ff:fef2:2764"]
+            vec!["192.0.2.53", "2001:db8::53"]
         );
     }
 
@@ -268,57 +268,57 @@ mod tests {
 
     #[test]
     fn 解析路由器地址() {
-        let text = "IP address: 172.20.10.2\nSubnet mask: 255.255.255.240\nRouter: 172.20.10.1\n";
-        assert_eq!(parse_router_info(text).as_deref(), Some("172.20.10.1"));
+        let text = "IP address: 192.0.2.10\nSubnet mask: 255.255.255.240\nRouter: 192.0.2.53\n";
+        assert_eq!(parse_router_info(text).as_deref(), Some("192.0.2.53"));
         assert_eq!(parse_router_info("Router: none\n"), None);
-        assert_eq!(parse_router_info("IP address: 172.20.10.2\n"), None);
+        assert_eq!(parse_router_info("IP address: 192.0.2.10\n"), None);
     }
 
     #[test]
     fn 路由精确匹配_不能被更宽网段顶替() {
-        let text = "   route to: 10.22.50.5\n\
-                    destination: 10.22.50\n\
+        let text = "   route to: 198.51.100.5\n\
+                    destination: 198.51.100\n\
                     \x20      mask: 255.255.255.0\n\
-                    \x20   gateway: 172.21.11.115\n\
+                    \x20   gateway: 192.0.2.1\n\
                     \x20 interface: utun4\n\
                     \x20     flags: <UP,GATEWAY,DONE,STATIC,PRCLONING>\n";
-        assert!(route_lookup_matches(text, "10.22.50.0", 24, "utun4"));
-        assert!(!route_lookup_matches(text, "10.22.50.5", 32, "utun4"));
-        assert!(!route_lookup_matches(text, "10.22.50.0", 24, "utun5"));
+        assert!(route_lookup_matches(text, "198.51.100.0", 24, "utun4"));
+        assert!(!route_lookup_matches(text, "198.51.100.5", 32, "utun4"));
+        assert!(!route_lookup_matches(text, "198.51.100.0", 24, "utun5"));
     }
 
     #[test]
     fn 路由精确匹配_主机路由与十六进制掩码() {
-        let text = "   route to: 10.22.50.5\ndestination: 10.22.50.5\n\
+        let text = "   route to: 198.51.100.5\ndestination: 198.51.100.5\n\
                     \x20      mask: 255.255.255.255\n\
                     \x20 interface: utun4\n";
-        assert!(route_lookup_matches(text, "10.22.50.5", 32, "utun4"));
-        assert!(!route_lookup_matches(text, "10.22.50.0", 24, "utun4"));
+        assert!(route_lookup_matches(text, "198.51.100.5", 32, "utun4"));
+        assert!(!route_lookup_matches(text, "198.51.100.0", 24, "utun4"));
 
-        let hex = "destination: 172.18.0.160\n       mask: 0xfffffffe\n    interface: utun4\n";
-        assert!(route_lookup_matches(hex, "172.18.0.160", 31, "utun4"));
-        assert!(!route_lookup_matches(hex, "172.18.0.0", 24, "utun4"));
+        let hex = "destination: 203.0.113.160\n       mask: 0xfffffffe\n    interface: utun4\n";
+        assert!(route_lookup_matches(hex, "203.0.113.160", 31, "utun4"));
+        assert!(!route_lookup_matches(hex, "203.0.113.0", 24, "utun4"));
     }
 
     #[test]
     fn 默认路由不匹配具体网段() {
         let text = "destination: default\n       mask: default\n    interface: en0\n";
-        assert!(!route_lookup_matches(text, "10.22.50.0", 24, "en0"));
+        assert!(!route_lookup_matches(text, "198.51.100.0", 24, "en0"));
     }
 
     #[test]
     fn 探测地址_使用网段内主机地址() {
         assert_eq!(
-            route_probe_address("172.18.0.0", 24).as_deref(),
-            Some("172.18.0.1")
+            route_probe_address("203.0.113.0", 24).as_deref(),
+            Some("203.0.113.1")
         );
         assert_eq!(
-            route_probe_address("10.22.50.5", 32).as_deref(),
-            Some("10.22.50.5")
+            route_probe_address("198.51.100.5", 32).as_deref(),
+            Some("198.51.100.5")
         );
         assert_eq!(
-            route_probe_address("172.18.0.160", 31).as_deref(),
-            Some("172.18.0.160")
+            route_probe_address("203.0.113.160", 31).as_deref(),
+            Some("203.0.113.160")
         );
         assert_eq!(route_probe_address("bad", 24), None);
     }
@@ -326,16 +326,17 @@ mod tests {
     #[test]
     fn 只保留_ipv4_地址() {
         let values = vec![
-            "10.22.50.5".to_string(),
-            "fe80::1".to_string(),
-            "172.20.10.1".to_string(),
+            "198.51.100.5".to_string(),
+            "2001:db8::1".to_string(),
+            "192.0.2.53".to_string(),
         ];
-        assert_eq!(ipv4_only(&values), vec!["10.22.50.5", "172.20.10.1"]);
+        assert_eq!(ipv4_only(&values), vec!["198.51.100.5", "192.0.2.53"]);
     }
 
     #[test]
     fn 路由精确匹配_兼容带前缀的目标格式() {
-        let text = "destination: 10.22.50.0/24\n       mask: 255.255.255.0\n    interface: utun4\n";
-        assert!(route_lookup_matches(text, "10.22.50.0", 24, "utun4"));
+        let text =
+            "destination: 198.51.100.0/24\n       mask: 255.255.255.0\n    interface: utun4\n";
+        assert!(route_lookup_matches(text, "198.51.100.0", 24, "utun4"));
     }
 }
