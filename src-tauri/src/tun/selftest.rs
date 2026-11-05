@@ -3,6 +3,7 @@
 //! 不接触网关，几秒内结束。验证顺序：
 //! 管理员权限 → 定位 DLL → 建卡/会话 → 配置 IP → 回读 → 注入测试路由
 //! → 写路径（构造 ICMP 写入网卡）→ 读路径（本机回包经测试路由读回）→ 跨网段投递（INFO）
+//! 每个可能阻塞的系统操作单独限时 60 秒，避免某一步拖死整个自检。
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -21,6 +22,12 @@ pub const TEST_PING_TARGET: &str = "10.98.0.5";
 
 /// 单次 poll 后最多连续读取的报文数，避免持续流量饿死外层取消检查
 const MAX_PACKETS_PER_POLL: usize = 32;
+
+/// 单个自检步骤的最长执行时间
+const STEP_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// 步骤超时的统一明细
+const STEP_TIMEOUT_DETAIL: &str = "执行超时（60 秒）";
 
 /// 接收方向测试的报文源地址：必须落在测试路由网段内，回包才能按测试路由回到网卡
 const ECHO_SOURCE: [u8; 4] = [10, 98, 0, 5];
@@ -126,7 +133,14 @@ impl<F: FnMut(&SelfTestStep)> Builder<F> {
 pub async fn run<F: FnMut(&SelfTestStep)>(dll_path: &Path, on_step: F) -> SelfTestReport {
     let mut b = Builder::new(on_step);
 
-    if !is_elevated().await {
+    let elevated = match tokio::time::timeout(STEP_TIMEOUT, is_elevated()).await {
+        Ok(value) => value,
+        Err(_) => {
+            b.fail("管理员权限", STEP_TIMEOUT_DETAIL);
+            return b.finish();
+        }
+    };
+    if !elevated {
         #[cfg(windows)]
         b.fail("管理员权限", "未提权，无法创建虚拟网卡；请以管理员身份运行");
         #[cfg(target_os = "linux")]
@@ -165,24 +179,28 @@ pub async fn run<F: FnMut(&SelfTestStep)>(dll_path: &Path, on_step: F) -> SelfTe
 
     #[cfg(windows)]
     {
-        match reset_windows_adapter().await {
-            Ok(Some(detail)) => b.ok("清理上次自检残留", detail),
-            Ok(None) => b.info("清理上次自检残留", "未发现遗留的 TopSAP 虚拟网卡"),
-            Err(err) => {
+        match tokio::time::timeout(STEP_TIMEOUT, reset_windows_adapter()).await {
+            Ok(Ok(Some(detail))) => b.ok("清理上次自检残留", detail),
+            Ok(Ok(None)) => b.info("清理上次自检残留", "未发现遗留的 TopSAP 虚拟网卡"),
+            Ok(Err(err)) => {
                 b.fail(
                     "清理上次自检残留",
                     format!("{err}；请先断开连接或手动删除网卡后重试"),
                 );
                 return b.finish();
             }
+            Err(_) => {
+                b.fail("清理上次自检残留", STEP_TIMEOUT_DETAIL);
+                return b.finish();
+            }
         }
     }
     #[cfg(target_os = "linux")]
     {
-        match reset_unix_adapter().await {
-            Ok(Some(detail)) => b.ok("清理上次自检残留", detail),
-            Ok(None) => b.info("清理上次自检残留", "未发现遗留的 TUN 虚拟网卡"),
-            Err(err) => {
+        match tokio::time::timeout(STEP_TIMEOUT, reset_unix_adapter()).await {
+            Ok(Ok(Some(detail))) => b.ok("清理上次自检残留", detail),
+            Ok(Ok(None)) => b.info("清理上次自检残留", "未发现遗留的 TUN 虚拟网卡"),
+            Ok(Err(err)) => {
                 b.fail(
                     "清理上次自检残留",
                     format!(
@@ -191,31 +209,56 @@ pub async fn run<F: FnMut(&SelfTestStep)>(dll_path: &Path, on_step: F) -> SelfTe
                 );
                 return b.finish();
             }
+            Err(_) => {
+                b.fail("清理上次自检残留", STEP_TIMEOUT_DETAIL);
+                return b.finish();
+            }
         }
     }
     #[cfg(target_os = "macos")]
     b.info("清理上次自检残留", "系统 TUN 随进程关闭自动释放，无需清理");
 
-    let device = match TunDevice::open_for(dll_path, ADAPTER_NAME, TEST_VIP, TEST_MASK) {
-        Ok(d) => {
+    let open_path = dll_path.to_path_buf();
+    let opened = tokio::time::timeout(
+        STEP_TIMEOUT,
+        tokio::task::spawn_blocking(move || {
+            TunDevice::open_for(&open_path, ADAPTER_NAME, TEST_VIP, TEST_MASK)
+        }),
+    )
+    .await;
+    let device = match opened {
+        Ok(Ok(Ok(d))) => {
             b.ok("创建虚拟网卡与会话", format!("网卡 {}", d.interface_name()));
             Arc::new(d)
         }
-        Err(err) => {
+        Ok(Ok(Err(err))) => {
             b.fail("创建虚拟网卡与会话", err.to_string());
+            return b.finish();
+        }
+        Ok(Err(err)) => {
+            b.fail("创建虚拟网卡与会话", format!("执行失败：{err}"));
+            return b.finish();
+        }
+        Err(_) => {
+            b.fail("创建虚拟网卡与会话", STEP_TIMEOUT_DETAIL);
             return b.finish();
         }
     };
 
     let mut net = NetConfig::new(device.interface_name().to_string());
 
-    match net.configure_interface(TEST_VIP, TEST_MASK).await {
-        Ok(_) => {
+    match tokio::time::timeout(STEP_TIMEOUT, net.configure_interface(TEST_VIP, TEST_MASK)).await {
+        Ok(Ok(_)) => {
             b.ok("配置网卡地址", format!("{TEST_VIP}/{TEST_MASK}"));
             b.ok("回读网卡地址", format!("地址已生效（{TEST_VIP}）"));
         }
-        Err(err) => {
+        Ok(Err(err)) => {
             b.fail("配置网卡地址", err.to_string());
+            b.fail("回读网卡地址", "地址未生效");
+            return finish_with_cleanup(b, &mut net, device, dll_path).await;
+        }
+        Err(_) => {
+            b.fail("配置网卡地址", STEP_TIMEOUT_DETAIL);
             b.fail("回读网卡地址", "地址未生效");
             return finish_with_cleanup(b, &mut net, device, dll_path).await;
         }
@@ -226,17 +269,16 @@ pub async fn run<F: FnMut(&SelfTestStep)>(dll_path: &Path, on_step: F) -> SelfTe
         mask: TEST_ROUTE_MASK.to_string(),
         prefix: 16,
     };
-    let report = net.add_routes(&[route]).await;
-    if report.all_ok() {
-        b.ok(
+    match tokio::time::timeout(STEP_TIMEOUT, net.add_routes(&[route])).await {
+        Ok(report) if report.all_ok() => b.ok(
             "注入测试路由",
             format!("{TEST_ROUTE_DEST}/{TEST_ROUTE_MASK} 已生效"),
-        );
-    } else {
-        b.fail(
+        ),
+        Ok(_) => b.fail(
             "注入测试路由",
             format!("{TEST_ROUTE_DEST}/{TEST_ROUTE_MASK} 未生效"),
-        );
+        ),
+        Err(_) => b.fail("注入测试路由", STEP_TIMEOUT_DETAIL),
     }
 
     // 读线程：独立线程轮询网卡，避免占用 tokio worker
@@ -291,21 +333,26 @@ pub async fn run<F: FnMut(&SelfTestStep)>(dll_path: &Path, on_step: F) -> SelfTe
     let ping_args: &[&str] = &["-n", "1", "-w", "1000", TEST_PING_TARGET];
     #[cfg(unix)]
     let ping_args: &[&str] = &["-c", "1", "-W", "1", TEST_PING_TARGET];
-    let ping = shell::run("ping", ping_args).await;
-    if ping.ok {
-        b.ok(
+    match tokio::time::timeout(STEP_TIMEOUT, shell::run("ping", ping_args)).await {
+        Ok(ping) if ping.ok => b.ok(
             "系统路由（跨网段投递）",
             format!("ping {TEST_PING_TARGET} 成功，系统已把包交给网卡"),
-        );
-    } else {
-        b.info(
+        ),
+        Ok(_) => b.info(
             "系统路由（跨网段投递）",
             format!("ping {TEST_PING_TARGET} 未通（同网段无对端属正常，不影响真实连接）"),
-        );
+        ),
+        Err(_) => b.info("系统路由（跨网段投递）", "ping 执行超时（60 秒）"),
     }
 
     running.store(false, Ordering::Relaxed);
-    let _ = reader.join();
+    let _ = tokio::time::timeout(
+        STEP_TIMEOUT,
+        tokio::task::spawn_blocking(move || {
+            let _ = reader.join();
+        }),
+    )
+    .await;
     finish_with_cleanup(b, &mut net, device, dll_path).await
 }
 
@@ -315,10 +362,10 @@ async fn finish_with_cleanup<F: FnMut(&SelfTestStep)>(
     device: Arc<TunDevice>,
     _dll_path: &Path,
 ) -> SelfTestReport {
-    cleanup(net, &device).await;
+    let _ = tokio::time::timeout(STEP_TIMEOUT, cleanup(net, &device)).await;
     drop(device);
     #[cfg(windows)]
-    let _ = reset_windows_adapter().await;
+    let _ = tokio::time::timeout(STEP_TIMEOUT, reset_windows_adapter()).await;
     b.finish()
 }
 

@@ -39,6 +39,12 @@ describe("localizeSelfTestDetail", () => {
     ).toBe(
       "No system reply was received within 3 seconds; check that the test route is active and the adapter read path works",
     );
+    expect(localizeSelfTestDetail("执行超时（60 秒）")).toBe(
+      "Timed out after 60 seconds",
+    );
+    expect(localizeSelfTestDetail("ping 执行超时（60 秒）")).toBe(
+      "ping timed out after 60 seconds",
+    );
   });
 
   it("区分 TUN 权限不足与网卡占用", () => {

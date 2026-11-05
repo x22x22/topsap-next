@@ -46,7 +46,10 @@ pub async fn run(program: &str, args: &[&str]) -> CmdOutput {
         std_cmd.creation_flags(0x0800_0000);
     }
 
-    match tokio::process::Command::from(std_cmd).output().await {
+    // 超时取消 future 时一并结束子进程，避免残留的 netsh/route 继续占用网卡
+    let mut command = tokio::process::Command::from(std_cmd);
+    command.kill_on_drop(true);
+    match command.output().await {
         Ok(output) => CmdOutput {
             ok: output.status.success(),
             stdout: decode(&output.stdout),

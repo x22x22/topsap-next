@@ -166,8 +166,6 @@ export function localizeError(message: string): string {
       "The adapter self-test is running. Wait for it to finish before connecting."],
     [/^请先等待当前连接流程结束或断开连接后再运行自检$/,
       "Wait for the current connection attempt to finish, or disconnect, before running the self-test."],
-    [/^自检超时（45 秒），已中止；下次自检会先清理上次残留的虚拟网卡$/,
-      "The self-test timed out after 45 seconds and was stopped; the next run will clean up the leftover adapter first."],
     [/^创建 TUN 设备失败：当前用户没有创建 TUN 接口的权限；Linux 版需要以 root 运行，请在终端执行 (.+) 启动应用$/,
       "Failed to create the TUN device: the current user lacks permission to create a TUN interface. The Linux build must run as root; start it from a terminal with $1."],
     [/^创建 TUN 设备失败：网卡 (.+) 已被占用，可能是上次自检或连接未退出；请退出所有 TopSAP 实例，或执行 sudo ip link del (.+) 后重试$/,

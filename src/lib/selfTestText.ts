@@ -44,6 +44,8 @@ const DETAIL_EN: Array<[RegExp, string]> = [
   [/^(.+) 已生效$/, "$1 is active"],
   [/^(.+) 未生效$/, "$1 is not active"],
   [/^已就绪$/, "Ready"],
+  [/^执行超时（60 秒）$/, "Timed out after 60 seconds"],
+  [/^ping 执行超时（60 秒）$/, "ping timed out after 60 seconds"],
   [/^已向网卡注入 (\d+) 字节 ICMP 请求（(.+) → (.+)）$/,
     "Injected a $1-byte ICMP request into the adapter ($2 → $3)"],
   [/^写入失败，网卡会话不可用$/, "Write failed; the adapter session is unavailable"],

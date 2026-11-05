@@ -18,9 +18,9 @@
 - 补齐登录改密提示（密码到期、过弱、首次登录、管理员要求改密）与「需要修改密码后才能登录」的中英文映射；新增文案同步检查规范
 - 自动重连日志去掉「（等待 N 秒）」：该文案在每次重连尝试前打印，与实际重连耗时不一致
 - 找回密码成功提示补充「新密码已自动填入」，与登录框自动回填行为一致
-- 网卡自检：切换页面后保持运行与按钮旋转状态；每一步完成后立即展示；开始前清理上次残留的 `TopSAP` 虚拟网卡，修复 `Win32 1247` 与残留网卡；增加 45 秒超时保护与并发运行保护
+- 网卡自检：切换页面后保持运行与按钮旋转状态；每一步完成后立即展示；开始前清理上次残留的 `TopSAP` 虚拟网卡，修复 `Win32 1247` 与残留网卡；增加并发运行保护
 - macOS：路由改为 `route -n add -net <dest> -netmask <mask> <VIP>` 并回读接口；DNS 通过 `networksetup` 按「VPN DNS 在前、原 DNS 在后」写入当前网络服务，断开时恢复原列表或自动获取；helper 增加 `networksetup` 白名单并独立版本号以触发重装
-- Linux / macOS 自检：Unix TUN fd 改为非阻塞，读线程改为每轮 `poll` 后最多读取 32 个报文并用 `try_send` 投递；`reader.join()` 不再阻塞异步任务，45 秒超时恢复生效，自检结束能正常清理路由与网卡
+- Linux / macOS 自检：Unix TUN fd 改为非阻塞，读线程改为每轮 `poll` 后最多读取 32 个报文并用 `try_send` 投递；`reader.join()` 不再阻塞异步任务，自检结束能正常清理路由与网卡
 - Linux 自检残留：开始前仅删除带自检地址 `10.99.99.2` 的 `topsap0`，避免误删正在使用的连接网卡；自检运行中拒绝连接，连接流程中或存在待清理资源时拒绝自检
 - Linux TUN 错误提示：`EPERM/EACCES` 提示需要 root 并给出 `sudo <当前exe>` 命令；`EBUSY` 提示 `topsap0` 被占用并给出 `sudo ip link del topsap0`，不再混用同一条「特权 helper」提示
 - Linux 未提权启动：普通用户双击启动时弹窗提示改用 `sudo /usr/bin/topsap-client`；Linux 自检与网卡配置文案移除「系统授权框 / helper」，macOS 保持原提示
@@ -30,6 +30,7 @@
 - macOS DNS：原 DNS 为自动获取、`networksetup -getdnsservers` 为空时，读取 `scutil --dns` 的默认接口解析器（含 IPv6），仍为空则回退 `networksetup -getinfo` 的 `Router`，按「VPN DNS + 原 DNS」写入；helper 增加 `scutil --dns` 白名单并升级版本以触发重装
 - macOS 路由：回读同时比对 `route -n get` 的 `destination` 与 `mask`，修复被 `/24` 覆盖的 `/32` 与 `/31` 被误判为已存在而跳过的问题；删除路由失败时再按 VIP 网关形式补删一次
 - 英文映射补齐：macOS helper 未运行、网卡地址配置失败、Windows 虚拟网卡/会话创建失败（含 Win32 提示）、`设置网卡地址失败` 的尝试轮次、Linux/通用 TUN 创建失败、hosts 读写失败；自检明细未命中专用句式时回退到通用后端错误映射
+- 网卡自检：去掉 45 秒全局超时，改为管理员、残留清理、建卡、配置地址、注入路由、ping、读线程回收与清理等每个步骤独立 60 秒超时；超时只标记当前步骤失败并继续清理，被取消的系统命令随 future 结束，避免残留 `netsh`/`route` 占用网卡
 - macOS 代理绕过：改为经 privileged helper 执行 `networksetup`，修复普通用户写入 `-setproxybypassdomains` 失败且仅记录日志的问题；helper 白名单新增 `-getproxybypassdomains` / `-setproxybypassdomains`，服务名与条目按既有规则校验，`HELPER_VERSION` 升至 `1.2.3`
 
 ## 1.1.1

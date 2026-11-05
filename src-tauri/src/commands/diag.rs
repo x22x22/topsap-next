@@ -1,7 +1,6 @@
 //! 诊断命令：网卡自检、残留检测与清理。
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
@@ -17,9 +16,8 @@ static SELF_TEST_RUNNING: AtomicBool = AtomicBool::new(false);
 pub fn self_test_running() -> bool {
     SELF_TEST_RUNNING.load(Ordering::SeqCst)
 }
-const SELF_TEST_TIMEOUT: Duration = Duration::from_secs(45);
 
-/// 自检结束后恢复运行标记，超时或 panic 都不会永久卡住
+/// 自检结束后恢复运行标记，panic 也不会永久卡住
 struct SelfTestGuard;
 
 impl Drop for SelfTestGuard {
@@ -44,26 +42,22 @@ pub async fn run_self_test(
     }
     let _guard = SelfTestGuard;
 
-    let report = tokio::time::timeout(
-        SELF_TEST_TIMEOUT,
-        selftest::run(&state.dll_path, |step| {
-            let _ = app.emit(
-                "self_test://step",
-                SelfTestStepDto {
-                    name: step.name.to_string(),
-                    status: match step.status {
-                        StepStatus::Ok => "ok",
-                        StepStatus::Fail => "fail",
-                        StepStatus::Info => "info",
-                    }
-                    .to_string(),
-                    detail: step.detail.clone(),
-                },
-            );
-        }),
-    )
-    .await
-    .map_err(|_| "自检超时（45 秒），已中止；下次自检会先清理上次残留的虚拟网卡".to_string())?;
+    let report = selftest::run(&state.dll_path, |step| {
+        let _ = app.emit(
+            "self_test://step",
+            SelfTestStepDto {
+                name: step.name.to_string(),
+                status: match step.status {
+                    StepStatus::Ok => "ok",
+                    StepStatus::Fail => "fail",
+                    StepStatus::Info => "info",
+                }
+                .to_string(),
+                detail: step.detail.clone(),
+            },
+        );
+    })
+    .await;
 
     Ok(SelfTestDto {
         ok: report.ok,
