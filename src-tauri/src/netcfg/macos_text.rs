@@ -42,11 +42,14 @@ pub fn parse_network_service_order(text: &str, ifname: &str) -> Option<String> {
 
 /// 解析 `networksetup -getdnsservers` 输出；自动获取时没有 IP 行
 pub fn parse_dns_servers(text: &str) -> Vec<String> {
-    text.lines()
-        .map(str::trim)
-        .filter(|line| line.parse::<IpAddr>().is_ok())
-        .map(str::to_string)
-        .collect()
+    text.lines().filter_map(dns_address).collect()
+}
+
+/// 归一化 DNS 地址：去掉链路本地 IPv6 的作用域后缀
+fn dns_address(line: &str) -> Option<String> {
+    let value = line.trim();
+    let base = value.split('%').next().unwrap_or(value);
+    base.parse::<IpAddr>().ok().map(|_| base.to_string())
 }
 
 /// 解析 `scutil --dns`，优先返回默认接口对应的解析器服务器
@@ -71,9 +74,9 @@ pub fn parse_scutil_dns(text: &str, ifname: &str) -> Vec<String> {
         }
         if let Some(rest) = line.strip_prefix("nameserver[") {
             if let Some((_, value)) = rest.split_once(']') {
-                if let Some(addr) = value.trim().strip_prefix(':').map(str::trim) {
-                    if addr.parse::<IpAddr>().is_ok() && !servers.iter().any(|item| item == addr) {
-                        servers.push(addr.to_string());
+                if let Some(addr) = value.trim().strip_prefix(':').and_then(dns_address) {
+                    if !servers.iter().any(|item| item == &addr) {
+                        servers.push(addr);
                     }
                 }
             }
@@ -209,9 +212,9 @@ mod tests {
     fn 解析_dns_列表() {
         assert_eq!(
             parse_dns_servers(
-                "8.8.8.8\n2001:4860:4860::8888\nThere aren't any DNS Servers set on Wi-Fi.\n"
+                "8.8.8.8\n2001:4860:4860::8888\nfe80::1%en0\nThere aren't any DNS Servers set on Wi-Fi.\n"
             ),
-            vec!["8.8.8.8", "2001:4860:4860::8888"]
+            vec!["8.8.8.8", "2001:4860:4860::8888", "fe80::1"]
         );
         assert!(parse_dns_servers("There aren't any DNS Servers set on Wi-Fi.\n").is_empty());
     }
