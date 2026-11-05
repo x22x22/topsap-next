@@ -29,6 +29,7 @@
 - macOS DNS：原 DNS 为自动获取、`networksetup -getdnsservers` 为空时，读取 `scutil --dns` 的默认接口解析器（含 IPv6），仍为空则回退 `networksetup -getinfo` 的 `Router`，按「VPN DNS + 原 DNS」写入；helper 增加 `scutil --dns` 白名单并升级版本以触发重装
 - macOS 路由：回读同时比对 `route -n get` 的 `destination` 与 `mask`，修复被 `/24` 覆盖的 `/32` 与 `/31` 被误判为已存在而跳过的问题；删除路由失败时再按 VIP 网关形式补删一次
 - 英文映射补齐：macOS helper 未运行、网卡地址配置失败、Windows 虚拟网卡/会话创建失败（含 Win32 提示）、`设置网卡地址失败` 的尝试轮次、Linux/通用 TUN 创建失败、hosts 读写失败；自检明细未命中专用句式时回退到通用后端错误映射
+- macOS 代理绕过：改为经 privileged helper 执行 `networksetup`，修复普通用户写入 `-setproxybypassdomains` 失败且仅记录日志的问题；helper 白名单新增 `-getproxybypassdomains` / `-setproxybypassdomains`，服务名与条目按既有规则校验，`HELPER_VERSION` 升至 `1.2.3`
 
 ## 1.1.1
 

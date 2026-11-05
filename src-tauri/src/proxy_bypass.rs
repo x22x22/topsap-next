@@ -9,7 +9,7 @@ use tauri::AppHandle;
 use crate::dto::{AppSettings, ProxyBypassStatus};
 
 pub const DEFAULT_ENTRIES: [&str; 2] = ["*.sunline.cn", "*.sunline-i.com"];
-const MAX_ENTRIES: usize = 128;
+pub(crate) const MAX_ENTRIES: usize = 128;
 const MAX_LEN: usize = 255;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -47,6 +47,18 @@ fn normalize_one(raw: &str) -> Result<String, String> {
         return Err(format!("代理绕过条目包含非法字符：{entry}"));
     }
     Ok(entry)
+}
+
+/// helper 白名单使用：判断条目是否可安全传给 networksetup
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn is_safe_entry(raw: &str) -> bool {
+    let entry = raw.trim();
+    !entry.is_empty()
+        && entry.len() <= MAX_LEN
+        && entry != "*"
+        && !entry
+            .chars()
+            .any(|ch| ch.is_whitespace() || matches!(ch, ';' | ',' | '/' | '\\' | '=' | '"' | '\''))
 }
 
 pub fn normalize_entries(input: &[String]) -> Result<Vec<String>, String> {
@@ -267,6 +279,19 @@ mod platform {
     use std::process::Command;
 
     fn run(program: &str, args: &[&str]) -> Result<String, String> {
+        let owned: Vec<String> = args.iter().map(|arg| (*arg).to_string()).collect();
+        if let Some(output) = crate::privileged::run(program, &owned) {
+            if output.ok {
+                return Ok(output.stdout);
+            }
+            let detail = output.stderr.trim();
+            return Err(if detail.is_empty() {
+                format!("{program} 未返回成功状态")
+            } else {
+                format!("{program} 返回错误：{detail}")
+            });
+        }
+
         let output = Command::new(program)
             .args(args)
             .output()

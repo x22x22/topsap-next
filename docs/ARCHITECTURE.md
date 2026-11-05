@@ -222,7 +222,7 @@ TopSAP-Next/
 │       ├── protocol/{mod,frame,parser}.rs
 │       ├── tunnel/mod.rs
 │       ├── tun/{mod,ffi,device,unix,selftest}.rs
-│       ├── netcfg/{mod,macos_text,routes,hosts,shell,unix,windows}.rs
+│       ├── netcfg/{mod,macos_text,macos_networksetup,routes,hosts,shell,unix,windows}.rs
 │       ├── session/{mod,engine,state}.rs
 │       └── commands/{mod,app,conn,diag,profiles,settings}.rs
 ├── docs/
@@ -301,6 +301,7 @@ TLS 建连（不校验证书、不发 SNI）
 - 自检收发：接收方向不能依赖「非本机目标」触发回包；应注入「测试网段地址 → 本机 VIP」的 ICMP Echo 请求，由系统生成回包并经测试路由回到 utun，同时验证读路径与路由
 - 内网域名：解析 `dns_info.dns_list` 后仅保留在会话数据中，不修改系统 hosts（与原客户端一致）；`hosts` 模块保留用于清理旧版本残留
 - DNS：Windows 设置网卡 DNS `dns1_v4` / `dns2_v4`；macOS 通过 `networksetup` 把当前网络服务改为手动 DNS，VPN DNS 在前、原 DNS 在后，断开时恢复原列表或自动获取；原 DNS 为自动获取（`-getdnsservers` 为空）时读取 `scutil --dns` 的默认接口解析器（含 IPv6），仍为空则回退 `networksetup -getinfo` 的 `Router`；Linux 不修改全局 DNS
+- 代理绕过：Windows 写 `ProxyOverride`；macOS 经 privileged helper 执行 `networksetup -getproxybypassdomains` / `-setproxybypassdomains`，普通用户无需 root；Linux 写 GNOME `gsettings ignore-hosts`
 
 ---
 
@@ -318,7 +319,7 @@ TLS 建连（不校验证书、不发 SNI）
 | `session` | 生命周期编排、事件广播、自动重连 | `Engine`, `EngineState`, `EngineEvent` |
 | `platform` | 运行环境探测，区分 Windows 7 与较新系统 | `is_windows7()` |
 | `settings` | 应用设置读写与校验 | `AppSettings` |
-| `proxy_bypass` | Windows / macOS / Linux 系统代理绕过列表同步 | `ProxyBypassStatus` |
+| `proxy_bypass` | Windows / macOS / Linux 系统代理绕过列表同步；macOS 经 helper 执行 `networksetup` | `ProxyBypassStatus` |
 | `secret_store` | 跨平台 keyring（Windows 凭据管理器 / macOS 钥匙串 / Linux Secret Service）+ AES-GCM 回退 | `SecretStore` |
 | `helper` | macOS root LaunchDaemon：创建 utun、执行 ifconfig/route 白名单命令 | `helper::run()` |
 | `privileged` | macOS helper 客户端、LaunchDaemon 安装与版本探活 | `ensure_helper()`, `create_tun()`, `run()` |

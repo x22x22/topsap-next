@@ -12,6 +12,9 @@ pub mod routes;
 #[cfg(any(target_os = "macos", test))]
 mod macos_text;
 
+#[cfg(any(target_os = "macos", test))]
+pub(crate) mod macos_networksetup;
+
 #[cfg(unix)]
 mod unix;
 #[cfg(windows)]
