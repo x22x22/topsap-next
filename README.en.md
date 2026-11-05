@@ -336,6 +336,7 @@ topsap-next/
 
 | Version | Release date | Changelog |
 | --- | --- | --- |
+| v1.3.1 | 2026-11-05 | [verchanglog/v1.3.1.md](verchanglog/v1.3.1.md) |
 | v1.3.0 | 2026-11-05 | [verchanglog/v1.3.0.md](verchanglog/v1.3.0.md) |
 | v1.2.2 | 2026-11-05 | [verchanglog/v1.2.2.md](verchanglog/v1.2.2.md) |
 | v1.2.1 | 2026-11-04 | [verchanglog/v1.2.1.md](verchanglog/v1.2.1.md) |
