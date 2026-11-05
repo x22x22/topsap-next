@@ -9,6 +9,9 @@ pub mod shell;
 #[cfg(windows)]
 pub mod routes;
 
+#[cfg(any(target_os = "macos", test))]
+mod macos_text;
+
 #[cfg(unix)]
 mod unix;
 #[cfg(windows)]

@@ -1,4 +1,4 @@
-//! macOS 特权 helper：以 root 运行，提供 TUN 创建与 ifconfig/route 白名单命令。
+//! macOS 特权 helper：以 root 运行，提供 TUN 创建与 ifconfig/route/networksetup/scutil 白名单命令。
 //!
 //! 由 LaunchDaemon 启动，只接受安装时指定 uid 的本地连接；不执行任意命令。
 
@@ -17,7 +17,7 @@ use crate::tun::TunDevice;
 
 const SOCKET_DIR: &str = "/var/run/topsap-next";
 /// helper 权限/协议版本；新增白名单命令时必须递增，触发已安装 helper 重装
-pub const HELPER_VERSION: &str = "1.2.1";
+pub const HELPER_VERSION: &str = "1.2.2";
 
 #[derive(Debug, Deserialize)]
 struct Request {
@@ -190,10 +190,14 @@ fn run_command(request: &Request) -> Response {
         "ifconfig" => "/sbin/ifconfig",
         "route" => "/sbin/route",
         "networksetup" => "/usr/sbin/networksetup",
+        "scutil" => "/usr/sbin/scutil",
         _ => return Response::error("不允许的命令"),
     };
     if request.program == "networksetup" && !allowed_networksetup(&request.args) {
         return Response::error("不允许的 networksetup 参数");
+    }
+    if request.program == "scutil" && !(request.args.len() == 1 && request.args[0] == "--dns") {
+        return Response::error("不允许的 scutil 参数");
     }
     match Command::new(program).args(&request.args).output() {
         Ok(output) => Response {

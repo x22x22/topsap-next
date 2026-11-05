@@ -7,7 +7,16 @@ use std::time::Duration;
 
 use crate::auth::RouteEntry;
 
+#[cfg(target_os = "macos")]
+use super::macos_text::{
+    parse_dns_servers, parse_network_service_order, parse_router_info, parse_scutil_dns,
+    route_lookup_matches,
+};
 use super::{hosts, shell, NetError, RouteReport};
+
+/// `networksetup setdnsservers` 的参数上限：helper 只允许「命令 + 服务名 + 8 个地址」
+#[cfg(target_os = "macos")]
+const MAX_DNS_SERVERS: usize = 8;
 
 #[derive(Debug, Clone)]
 enum LedgerEntry {
@@ -201,25 +210,17 @@ impl NetConfig {
     pub async fn set_dns(&mut self, dns1: &str, dns2: &str) -> bool {
         #[cfg(target_os = "macos")]
         {
-            let Some(service) = self.active_service().await else {
+            let Some((service, servers, configured)) = self.macos_dns_plan(dns1, dns2).await else {
                 return false;
             };
-            let original = self.read_dns(&service).await;
-            let mut servers: Vec<String> = [dns1, dns2]
-                .into_iter()
-                .filter(|value| !value.is_empty() && *value != "0.0.0.0")
-                .map(str::to_string)
-                .collect();
-            if servers.is_empty() {
-                return false;
-            }
-            servers.extend(original.iter().cloned());
-            let mut args: Vec<String> = vec!["setdnsservers".to_string(), service.clone()];
-            args.extend(servers);
-            let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-            let out = shell::run("networksetup", &refs).await;
+            let mut args: Vec<&str> = vec!["setdnsservers", service.as_str()];
+            args.extend(servers.iter().map(String::as_str));
+            let out = shell::run("networksetup", &args).await;
             if out.ok {
-                self.ledger.push(LedgerEntry::Dns { service, original });
+                self.ledger.push(LedgerEntry::Dns {
+                    service,
+                    original: configured,
+                });
                 true
             } else {
                 false
@@ -231,6 +232,57 @@ impl NetConfig {
             // Linux 不修改全局 DNS：内网域名仅解析保留，系统解析器保持原样
             false
         }
+    }
+
+    /// 组装「VPN DNS + 原 DNS」；原 DNS 为自动获取时从系统解析器或路由器补全
+    #[cfg(target_os = "macos")]
+    async fn macos_dns_plan(
+        &self,
+        dns1: &str,
+        dns2: &str,
+    ) -> Option<(String, Vec<String>, Vec<String>)> {
+        let service = self.active_service().await?;
+        let configured = self.read_dns(&service).await;
+        let original = if configured.is_empty() {
+            self.system_dns(&service).await
+        } else {
+            configured.clone()
+        };
+        let mut servers: Vec<String> = [dns1, dns2]
+            .into_iter()
+            .filter(|value| !value.is_empty() && *value != "0.0.0.0")
+            .map(str::to_string)
+            .collect();
+        if servers.is_empty() {
+            return None;
+        }
+        for value in original {
+            if !servers.contains(&value) {
+                servers.push(value);
+            }
+        }
+        servers.truncate(MAX_DNS_SERVERS);
+        Some((service, servers, configured))
+    }
+
+    /// 读取自动获取的原 DNS：优先系统解析器（含 IPv6），回退路由器地址
+    #[cfg(target_os = "macos")]
+    async fn system_dns(&self, service: &str) -> Vec<String> {
+        let out = shell::run("scutil", &["--dns"]).await;
+        let mut servers = if out.ok {
+            parse_scutil_dns(&out.stdout, &self.ifname)
+        } else {
+            Vec::new()
+        };
+        if servers.is_empty() {
+            let info = shell::run("networksetup", &["-getinfo", service]).await;
+            if info.ok {
+                if let Some(router) = parse_router_info(&info.stdout) {
+                    servers.push(router);
+                }
+            }
+        }
+        servers
     }
 
     /// 找到当前默认路由对应的网络服务（Wi-Fi / Ethernet 等）
@@ -295,7 +347,6 @@ impl NetConfig {
                     }
                     #[cfg(target_os = "macos")]
                     {
-                        let _ = prefix;
                         let _ = shell::run(
                             "route",
                             &[
@@ -310,6 +361,15 @@ impl NetConfig {
                             ],
                         )
                         .await;
+                        if macos_route_exists(&self.ifname, &dest, prefix).await {
+                            if let Some(vip) = self.vip.as_deref() {
+                                let _ = shell::run(
+                                    "route",
+                                    &["-n", "delete", "-net", &dest, "-netmask", &mask, vip],
+                                )
+                                .await;
+                            }
+                        }
                     }
                 }
                 LedgerEntry::Bypass { ip } => {
@@ -350,14 +410,7 @@ impl NetConfig {
         }
         #[cfg(target_os = "macos")]
         {
-            let _ = prefix;
-            let out = shell::run("route", &["-n", "get", dest]).await;
-            let expected = format!("interface: {}", self.ifname);
-            out.ok
-                && out
-                    .stdout
-                    .lines()
-                    .any(|line| line.trim() == expected.as_str())
+            macos_route_exists(&self.ifname, dest, prefix).await
         }
     }
 
@@ -409,45 +462,11 @@ impl NetConfig {
     }
 }
 
-/// 解析 `networksetup -listnetworkserviceorder`，按设备名找到网络服务
+/// 判断 macOS 路由表里是否存在精确命中目标网段与本机接口的路由
 #[cfg(target_os = "macos")]
-fn parse_network_service_order(text: &str, ifname: &str) -> Option<String> {
-    let mut pending: Option<String> = None;
-    for line in text.lines() {
-        let line = line.trim();
-        let Some(rest) = line.strip_prefix('(') else {
-            continue;
-        };
-        let Some(end) = rest.find(')') else {
-            continue;
-        };
-        let inner = &rest[..end];
-        if !inner.is_empty() && inner.chars().all(|ch| ch.is_ascii_digit()) {
-            pending = Some(rest[end + 1..].trim().to_string());
-            continue;
-        }
-        if let Some(device) = line.split("Device:").nth(1) {
-            let device = device.trim().trim_end_matches(')').trim();
-            if device == ifname {
-                if let Some(service) = pending.take() {
-                    return Some(service);
-                }
-            } else {
-                pending = None;
-            }
-        }
-    }
-    None
-}
-
-/// 解析 `networksetup -getdnsservers` 输出；自动获取时没有 IP 行
-#[cfg(target_os = "macos")]
-fn parse_dns_servers(text: &str) -> Vec<String> {
-    text.lines()
-        .map(str::trim)
-        .filter(|line| line.parse::<std::net::IpAddr>().is_ok())
-        .map(str::to_string)
-        .collect()
+async fn macos_route_exists(ifname: &str, dest: &str, prefix: u8) -> bool {
+    let out = shell::run("route", &["-n", "get", dest]).await;
+    out.ok && route_lookup_matches(&out.stdout, dest, prefix, ifname)
 }
 
 /// 解析 Linux `ip addr` 或 macOS `ifconfig` 输出中的 IPv4 地址。
@@ -530,36 +549,5 @@ mod tests {
         let text =
             "inet6 fe80::1%topsap0 prefixlen 64\n    inet 192.0.2.10/24 scope global topsap0\n";
         assert_eq!(parse_interface_addresses(text), vec!["192.0.2.10"]);
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn 解析网络服务顺序() {
-        let text = "An asterisk (*) denotes that a network service is disabled.\n\
-                    (1) Wi-Fi\n\
-                    (Hardware Port: Wi-Fi, Device: en0)\n\
-                    (2) Ethernet\n\
-                    (Hardware Port: Ethernet, Device: en1)\n";
-        assert_eq!(
-            parse_network_service_order(text, "en0").as_deref(),
-            Some("Wi-Fi")
-        );
-        assert_eq!(
-            parse_network_service_order(text, "en1").as_deref(),
-            Some("Ethernet")
-        );
-        assert_eq!(parse_network_service_order(text, "en9"), None);
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn 解析DNS列表() {
-        assert_eq!(
-            parse_dns_servers(
-                "8.8.8.8\n2001:4860:4860::8888\nThere aren't any DNS Servers set on Wi-Fi.\n"
-            ),
-            vec!["8.8.8.8", "2001:4860:4860::8888"]
-        );
-        assert!(parse_dns_servers("There aren't any DNS Servers set on Wi-Fi.\n").is_empty());
     }
 }
