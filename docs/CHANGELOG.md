@@ -31,6 +31,8 @@
 - macOS 路由：回读同时比对 `route -n get` 的 `destination` 与 `mask`，修复被 `/24` 覆盖的 `/32` 与 `/31` 被误判为已存在而跳过的问题；删除路由失败时再按 VIP 网关形式补删一次
 - 英文映射补齐：macOS helper 未运行、网卡地址配置失败、Windows 虚拟网卡/会话创建失败（含 Win32 提示）、`设置网卡地址失败` 的尝试轮次、Linux/通用 TUN 创建失败、hosts 读写失败；自检明细未命中专用句式时回退到通用后端错误映射
 - 网卡自检：去掉 45 秒全局超时，改为管理员、残留清理、建卡、配置地址、注入路由、ping、读线程回收与清理等每个步骤独立 60 秒超时；超时只标记当前步骤失败并继续清理，被取消的系统命令随 future 结束，避免残留 `netsh`/`route` 占用网卡
+- macOS DNS：原 DNS 只追加 IPv4，忽略 `scutil --dns` 返回的链路本地 IPv6；断开时仍按原列表或 `Empty` 恢复
+- macOS 路由：回读改用网段内主机地址并重试一次，以回读结果判定是否生效，修复路由实际已存在（`route add` 返回非零）时误报「未生效」的问题
 - macOS 代理绕过：改为经 privileged helper 执行 `networksetup`，修复普通用户写入 `-setproxybypassdomains` 失败且仅记录日志的问题；helper 白名单新增 `-getproxybypassdomains` / `-setproxybypassdomains`，服务名与条目按既有规则校验，`HELPER_VERSION` 升至 `1.2.3`
 
 ## 1.1.1

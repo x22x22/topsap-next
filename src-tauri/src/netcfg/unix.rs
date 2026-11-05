@@ -9,8 +9,8 @@ use crate::auth::RouteEntry;
 
 #[cfg(target_os = "macos")]
 use super::macos_text::{
-    parse_dns_servers, parse_network_service_order, parse_router_info, parse_scutil_dns,
-    route_lookup_matches,
+    ipv4_only, parse_dns_servers, parse_network_service_order, parse_router_info, parse_scutil_dns,
+    route_lookup_matches, route_probe_address,
 };
 use super::{hosts, shell, NetError, RouteReport};
 
@@ -187,7 +187,12 @@ impl NetConfig {
                 }
             };
 
-            if out.ok && self.has_route(&route.dest, route.prefix).await {
+            #[cfg(target_os = "macos")]
+            let installed = self.has_route(&route.dest, route.prefix).await;
+            #[cfg(target_os = "linux")]
+            let installed = out.ok && self.has_route(&route.dest, route.prefix).await;
+
+            if installed {
                 self.ledger.push(LedgerEntry::Route {
                     dest: route.dest.clone(),
                     mask: route.mask.clone(),
@@ -196,6 +201,18 @@ impl NetConfig {
                 });
                 ok += 1;
             } else {
+                #[cfg(target_os = "macos")]
+                {
+                    let detail = out.text();
+                    let detail = detail.trim();
+                    if detail.is_empty() {
+                        failed.push(target);
+                    } else {
+                        let brief: String = detail.chars().take(200).collect();
+                        failed.push(format!("{target} [{brief}]"));
+                    }
+                }
+                #[cfg(target_os = "linux")]
                 failed.push(target);
             }
         }
@@ -256,7 +273,7 @@ impl NetConfig {
         if servers.is_empty() {
             return None;
         }
-        for value in original {
+        for value in ipv4_only(&original) {
             if !servers.contains(&value) {
                 servers.push(value);
             }
@@ -265,7 +282,7 @@ impl NetConfig {
         Some((service, servers, configured))
     }
 
-    /// 读取自动获取的原 DNS：优先系统解析器（含 IPv6），回退路由器地址
+    /// 读取自动获取的原 DNS；仅 IPv4 会写入网络服务，IPv6 保留在系统原配置中
     #[cfg(target_os = "macos")]
     async fn system_dns(&self, service: &str) -> Vec<String> {
         let out = shell::run("scutil", &["--dns"]).await;
@@ -465,8 +482,17 @@ impl NetConfig {
 /// 判断 macOS 路由表里是否存在精确命中目标网段与本机接口的路由
 #[cfg(target_os = "macos")]
 async fn macos_route_exists(ifname: &str, dest: &str, prefix: u8) -> bool {
-    let out = shell::run("route", &["-n", "get", dest]).await;
-    out.ok && route_lookup_matches(&out.stdout, dest, prefix, ifname)
+    let probe = route_probe_address(dest, prefix).unwrap_or_else(|| dest.to_string());
+    for attempt in 0..2 {
+        let out = shell::run("route", &["-n", "get", &probe]).await;
+        if out.ok && route_lookup_matches(&out.stdout, dest, prefix, ifname) {
+            return true;
+        }
+        if attempt == 0 {
+            tokio::time::sleep(Duration::from_millis(120)).await;
+        }
+    }
+    false
 }
 
 /// 解析 Linux `ip addr` 或 macOS `ifconfig` 输出中的 IPv4 地址。

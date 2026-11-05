@@ -152,6 +152,27 @@ pub fn route_lookup_matches(text: &str, dest: &str, prefix: u8, ifname: &str) ->
     network_value(actual, prefix) == network_value(expected, prefix)
 }
 
+/// 只保留 IPv4 地址，避免把 IPv6 解析器写入网络服务 DNS
+pub fn ipv4_only(values: &[String]) -> Vec<String> {
+    values
+        .iter()
+        .filter(|value| value.parse::<std::net::Ipv4Addr>().is_ok())
+        .cloned()
+        .collect()
+}
+
+/// 供 `route get` 探测的目标地址：使用网段内第一个主机地址，避免直接查询网络地址
+pub fn route_probe_address(dest: &str, prefix: u8) -> Option<String> {
+    let value = ipv4_value(dest)?;
+    let probe = if prefix >= 31 { value } else { value + 1 };
+    Some(u32_to_ipv4(probe))
+}
+
+fn u32_to_ipv4(value: u32) -> String {
+    let octets = value.to_be_bytes();
+    format!("{}.{}.{}.{}", octets[0], octets[1], octets[2], octets[3])
+}
+
 fn mask_text_to_prefix(text: &str) -> Option<u8> {
     let text = text.trim();
     let Some(hex) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) else {
@@ -283,6 +304,33 @@ mod tests {
     fn 默认路由不匹配具体网段() {
         let text = "destination: default\n       mask: default\n    interface: en0\n";
         assert!(!route_lookup_matches(text, "10.22.50.0", 24, "en0"));
+    }
+
+    #[test]
+    fn 探测地址_使用网段内主机地址() {
+        assert_eq!(
+            route_probe_address("172.18.0.0", 24).as_deref(),
+            Some("172.18.0.1")
+        );
+        assert_eq!(
+            route_probe_address("10.22.50.5", 32).as_deref(),
+            Some("10.22.50.5")
+        );
+        assert_eq!(
+            route_probe_address("172.18.0.160", 31).as_deref(),
+            Some("172.18.0.160")
+        );
+        assert_eq!(route_probe_address("bad", 24), None);
+    }
+
+    #[test]
+    fn 只保留_ipv4_地址() {
+        let values = vec![
+            "10.22.50.5".to_string(),
+            "fe80::1".to_string(),
+            "172.20.10.1".to_string(),
+        ];
+        assert_eq!(ipv4_only(&values), vec!["10.22.50.5", "172.20.10.1"]);
     }
 
     #[test]
