@@ -27,6 +27,11 @@ export interface UpdateInfo {
   url: string;
 }
 
+export interface UpdateCheck {
+  update: UpdateInfo | null;
+  checked: boolean;
+}
+
 export interface LoginForm {
   gateway: string;
   port?: number;

@@ -17,7 +17,7 @@ import type {
   SelfTestStep,
   SessionSummary,
   Stats,
-  UpdateInfo,
+  UpdateCheck,
 } from "../types/engine";
 import { isMockMode, mockInvoke, mockListen } from "./mock";
 
@@ -27,7 +27,7 @@ const call = <T>(cmd: string, args?: Record<string, unknown>): Promise<T> =>
 /** 前端唯一的 IPC 边界：组件禁止直接 invoke */
 export const api = {
   appInfo: () => call<AppInfo>("app_info"),
-  checkUpdate: () => call<UpdateInfo | null>("check_update"),
+  checkUpdate: () => call<UpdateCheck>("check_update"),
   openUrl: (url: string) => call<void>("open_url", { url }),
 
   connect: (form: LoginForm) => call<SessionSummary>("connect", { form }),

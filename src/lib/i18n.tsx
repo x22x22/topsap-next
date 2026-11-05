@@ -377,6 +377,9 @@ const EN: Record<string, string> = {
     "Update to the latest version for fixes and improvements. Click Download to open the download page.",
   "前往": "Download",
   "无法打开下载页面": "Unable to open the download page",
+  "检查更新": "Check for updates",
+  "已是最新版本": "You're up to date",
+  "检查更新失败": "Failed to check for updates",
   // 诊断
   "残留检查": "Residue check",
   "旧版本异常退出可能留下 hosts 标记段，检测到后可一键清理":

@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import {
   Activity,
   Languages,
+  Loader2,
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
@@ -41,6 +42,8 @@ export function AppShell({
   settingsOpen = false,
   updateAvailable = false,
   onUpdateClick,
+  checkingUpdate = false,
+  onCheckUpdate,
   children,
 }: {
   page: PageId;
@@ -56,6 +59,8 @@ export function AppShell({
   settingsOpen?: boolean;
   updateAvailable?: boolean;
   onUpdateClick?: () => void;
+  checkingUpdate?: boolean;
+  onCheckUpdate?: () => void;
   children: ReactNode;
 }) {
   const { t, lang, toggleLang } = useI18n();
@@ -155,7 +160,18 @@ export function AppShell({
                 <div className="flex items-center justify-between gap-2">
                   <dt className="text-faint">{t("版本")}</dt>
                   <dd className="flex min-w-0 items-center justify-end gap-1.5 font-mono text-muted">
-                    <span className="truncate">{version || "—"}</span>
+                    <button
+                      type="button"
+                      onClick={onCheckUpdate}
+                      disabled={checkingUpdate}
+                      title={t("检查更新")}
+                      className="inline-flex min-w-0 items-center gap-1 rounded text-left transition hover:text-text disabled:opacity-60"
+                    >
+                      <span className="truncate">{version || "—"}</span>
+                      {checkingUpdate ? (
+                        <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
+                      ) : null}
+                    </button>
                     {updateAvailable ? (
                       <button
                         type="button"

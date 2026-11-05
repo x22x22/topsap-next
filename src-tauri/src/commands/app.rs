@@ -15,10 +15,10 @@ pub async fn app_info(app: AppHandle) -> AppInfo {
     }
 }
 
-/// 检查发布目录中的最新版本；无更新或无法访问时返回 null
+/// 检查发布目录中的最新版本；区分“无更新”和“检查失败”
 #[tauri::command]
-pub async fn check_update() -> Option<crate::update::UpdateInfo> {
-    crate::update::check().await
+pub async fn check_update() -> crate::update::UpdateCheck {
+    crate::update::check_result().await
 }
 
 /// 打开日志目录，返回路径供界面展示

@@ -20,26 +20,30 @@ pub struct UpdateInfo {
     pub url: String,
 }
 
-/// 查询发布目录中的版本号；网络不可达或内容非法时返回 None
-pub async fn check() -> Option<UpdateInfo> {
+/// 检查结果：`checked=false` 表示网络或内容异常，不能据此判断是否有更新
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct UpdateCheck {
+    pub update: Option<UpdateInfo>,
+    pub checked: bool,
+}
+
+/// 查询发布目录中的版本号；成功时返回是否有更新，失败时返回原因
+pub async fn check() -> Result<Option<UpdateInfo>, String> {
     let mut client = HttpClient::new(VERSION_HOST, 443, CHECK_TIMEOUT);
-    let response = match client.request("GET", VERSION_PATH, None, &[]).await {
-        Ok(response) => response,
-        Err(err) => {
-            log::debug!("检查更新失败：{err}");
-            return None;
-        }
-    };
+    let response = client
+        .request("GET", VERSION_PATH, None, &[])
+        .await
+        .map_err(|err| err.to_string())?;
     if response.status != 200 {
-        log::debug!("检查更新失败：HTTP {}", response.status);
-        return None;
+        return Err(format!("HTTP {}", response.status));
     }
 
-    let latest = parse_version(&response.text())?;
+    let latest =
+        parse_version(&response.text()).ok_or_else(|| "版本文件内容无法识别".to_string())?;
     let current_text = env!("CARGO_PKG_VERSION");
-    let current = parse_version(current_text)?;
+    let current = parse_version(current_text).ok_or_else(|| "当前版本号无法解析".to_string())?;
     if is_newer(&latest, &current) {
-        Some(UpdateInfo {
+        Ok(Some(UpdateInfo {
             current: current_text.to_string(),
             latest: latest
                 .iter()
@@ -47,9 +51,26 @@ pub async fn check() -> Option<UpdateInfo> {
                 .collect::<Vec<_>>()
                 .join("."),
             url: DOWNLOAD_URL.to_string(),
-        })
+        }))
     } else {
-        None
+        Ok(None)
+    }
+}
+
+/// 供前端使用：把检查失败归一为 `checked=false`，成功时携带可选更新
+pub async fn check_result() -> UpdateCheck {
+    match check().await {
+        Ok(update) => UpdateCheck {
+            update,
+            checked: true,
+        },
+        Err(err) => {
+            log::debug!("检查更新失败：{err}");
+            UpdateCheck {
+                update: None,
+                checked: false,
+            }
+        }
     }
 }
 

@@ -30,6 +30,7 @@ export default function App() {
   const [elevationNoticeOpen, setElevationNoticeOpen] = useState(true);
   const [importNoticeOpen, setImportNoticeOpen] = useState(true);
   const [updateOpen, setUpdateOpen] = useState(false);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [summary, setSummary] = useState<SessionSummary | null>(null);
   const [resolvedTheme, setResolvedTheme] = useState<"dark" | "light">("dark");
   const [collapsed, setCollapsed] = useState(
@@ -59,6 +60,7 @@ export default function App() {
 
   const themeMode = settingsQuery.data?.theme ?? "system";
   const appInfo = infoQuery.data;
+  const updateInfo = updateQuery.data?.update ?? null;
   const needsRootNotice =
     appInfo?.platform === "linux" && !appInfo.elevated && elevationNoticeOpen;
   const noConnectionConfig =
@@ -149,6 +151,27 @@ export default function App() {
     setPage(next);
   };
 
+  const handleCheckUpdate = async () => {
+    if (checkingUpdate) return;
+    setCheckingUpdate(true);
+    try {
+      const result = await updateQuery.refetch();
+      if (!result.data?.checked) {
+        toast.error(t("检查更新失败"));
+        return;
+      }
+      if (result.data.update) {
+        setUpdateOpen(true);
+      } else {
+        toast.success(t("已是最新版本"));
+      }
+    } catch {
+      toast.error(t("检查更新失败"));
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
+
   return (
     <>
       <AppShell
@@ -163,8 +186,10 @@ export default function App() {
         theme={resolvedTheme}
         onToggleTheme={toggleTheme}
         settingsOpen={settingsOpen}
-        updateAvailable={Boolean(updateQuery.data)}
+        updateAvailable={Boolean(updateInfo)}
         onUpdateClick={() => setUpdateOpen(true)}
+        checkingUpdate={checkingUpdate}
+        onCheckUpdate={handleCheckUpdate}
       >
         {page === "connect" ? (
           <ConnectPage
@@ -268,13 +293,13 @@ export default function App() {
       </Modal>
 
       <Modal
-        open={updateOpen && Boolean(updateQuery.data)}
+        open={updateOpen && Boolean(updateInfo)}
         title={t("发现新版本")}
         description={
-          updateQuery.data
+          updateInfo
             ? t("当前版本 v{current}，最新版本 v{latest}", {
-                current: updateQuery.data.current,
-                latest: updateQuery.data.latest,
+                current: updateInfo.current,
+                latest: updateInfo.latest,
               })
             : undefined
         }
@@ -287,9 +312,8 @@ export default function App() {
             <Button
               variant="primary"
               onClick={() => {
-                const url = updateQuery.data?.url;
-                if (!url) return;
-                void api.openUrl(url).then(
+                if (!updateInfo) return;
+                void api.openUrl(updateInfo.url).then(
                   () => setUpdateOpen(false),
                   () => toast.error(t("无法打开下载页面")),
                 );
