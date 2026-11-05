@@ -222,7 +222,7 @@ TopSAP-Next/
 │       ├── protocol/{mod,frame,parser}.rs
 │       ├── tunnel/mod.rs
 │       ├── tun/{mod,ffi,device,unix,selftest}.rs
-│       ├── netcfg/{mod,routes,hosts,shell,unix,windows}.rs
+│       ├── netcfg/{mod,macos_text,routes,hosts,shell,unix,windows}.rs
 │       ├── session/{mod,engine,state}.rs
 │       └── commands/{mod,app,conn,diag,profiles,settings}.rs
 ├── docs/
@@ -297,8 +297,10 @@ TLS 建连（不校验证书、不发 SNI）
 - 自检与连接互斥：连接流程中或存在待清理资源时拒绝自检；自检运行中拒绝连接，避免两者争用同名 `topsap0`
 - 地址：`net_param.vip_v4` / `vip_mask`
 - 路由：按 ACL 目标网段与资源 `ip/mask` 并集生成；ACL 目标优先非零 `d_ip_v4`，否则取 `d_ip_v6`；`route_list` 不使用；网关 IP 必须加旁路路由；macOS 使用 `route -n add -net <dest> -netmask <mask> <VIP>`，Linux 使用 `ip route add <dest>/<prefix> dev <ifname>`
+- 路由回读：macOS 必须比对 `route -n get` 返回的 `destination` 与 `mask`；只按接口判断会把被 `/24` 覆盖的 `/32`、被 `/24` 覆盖的 `/31` 误判为已存在而跳过。删除失败时再按 VIP 网关形式补删一次
+- 自检收发：接收方向不能依赖「非本机目标」触发回包；应注入「测试网段地址 → 本机 VIP」的 ICMP Echo 请求，由系统生成回包并经测试路由回到 utun，同时验证读路径与路由
 - 内网域名：解析 `dns_info.dns_list` 后仅保留在会话数据中，不修改系统 hosts（与原客户端一致）；`hosts` 模块保留用于清理旧版本残留
-- DNS：Windows 设置网卡 DNS `dns1_v4` / `dns2_v4`；macOS 通过 `networksetup` 把当前网络服务改为手动 DNS，VPN DNS 在前、原 DNS 在后，断开时恢复原列表或自动获取；Linux 不修改全局 DNS
+- DNS：Windows 设置网卡 DNS `dns1_v4` / `dns2_v4`；macOS 通过 `networksetup` 把当前网络服务改为手动 DNS，VPN DNS 在前、原 DNS 在后，断开时恢复原列表或自动获取；原 DNS 为自动获取（`-getdnsservers` 为空）时读取 `scutil --dns` 的默认接口解析器（含 IPv6），仍为空则回退 `networksetup -getinfo` 的 `Router`；Linux 不修改全局 DNS
 
 ---
 
@@ -427,7 +429,7 @@ flowchart TD
   `/Library/LaunchDaemons/com.topsap.next.helper.plist` 并启动；
 - helper 以 `--helper --uid <uid>` 运行，只接受该 uid 的本地 Unix socket 连接；
 - helper 只提供两类能力：创建 utun 并通过 `SCM_RIGHTS` 传回 fd；执行
-  `/sbin/ifconfig` 与 `/sbin/route` 白名单命令；
+  `/sbin/ifconfig`、`/sbin/route`、`/usr/sbin/networksetup`、`/usr/sbin/scutil --dns` 白名单命令；
 - `tun/unix.rs` 在 macOS 优先使用 helper 创建 utun，`netcfg/shell.rs` 把
   ifconfig/route 请求转发给 helper；`is_elevated()` 以 helper 可用为准；
 - helper 不可用且进程不是 root 时，自检与连接明确提示 helper 未运行；

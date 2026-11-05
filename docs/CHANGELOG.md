@@ -25,6 +25,9 @@
 - Linux 未提权启动：普通用户双击启动时弹窗提示改用 `sudo /usr/bin/topsap-client`；Linux 自检与网卡配置文案移除「系统授权框 / helper」，macOS 保持原提示
 - 记住密码：`keyring` 补齐 `apple-native`、`sync-secret-service` 与 `crypto-rust` 后端，修复 Linux / macOS 因退化为进程内 mock 导致「保存成功但重启读不到密码」的问题；CI 增加 `libdbus-1-dev` / `pkg-config`
 - 记住密码说明统一为「系统安全存储」，避免在 Linux / macOS 上仍显示「系统凭据管理器」
+- macOS 自检接收方向：注入的 ICMP 请求改为「测试网段地址 → 本机 VIP」，由系统生成回包并经测试路由回到 utun；修复 macOS 上因目标非本机、内核不回包导致的「接收方向失败」
+- macOS DNS：原 DNS 为自动获取、`networksetup -getdnsservers` 为空时，读取 `scutil --dns` 的默认接口解析器（含 IPv6），仍为空则回退 `networksetup -getinfo` 的 `Router`，按「VPN DNS + 原 DNS」写入；helper 增加 `scutil --dns` 白名单并升级版本以触发重装
+- macOS 路由：回读同时比对 `route -n get` 的 `destination` 与 `mask`，修复被 `/24` 覆盖的 `/32` 与 `/31` 被误判为已存在而跳过的问题；删除路由失败时再按 VIP 网关形式补删一次
 
 ## 1.1.1
 
