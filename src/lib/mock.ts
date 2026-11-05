@@ -15,6 +15,7 @@ import type {
   SelfTestReport,
   SessionSummary,
   Stats,
+  UpdateInfo,
 } from "../types/engine";
 import { DEFAULT_PROXY_BYPASS } from "./proxyBypass";
 
@@ -104,6 +105,13 @@ async function handle(cmd: string, args?: Record<string, unknown>): Promise<unkn
         arch: "x86_64",
         elevated: true,
       } satisfies AppInfo;
+
+    case "check_update":
+      return {
+        current: "0.1.0",
+        latest: "0.1.1",
+        url: "https://pan.sunline.cn/index.php?share/folder&user=123&sid=ra6BDZXP",
+      } satisfies UpdateInfo;
 
     case "engine_snapshot":
       return stats;

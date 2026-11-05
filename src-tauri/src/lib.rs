@@ -25,6 +25,7 @@ pub mod shutdown;
 pub mod tls;
 pub mod tun;
 pub mod tunnel;
+pub mod update;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -91,6 +92,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::app::app_info,
+            commands::app::check_update,
             commands::app::open_log_dir,
             commands::app::open_url,
             commands::conn::connect,

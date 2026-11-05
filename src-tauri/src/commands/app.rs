@@ -1,4 +1,4 @@
-//! 应用信息与日志目录。
+//! 应用信息、版本检查与日志目录。
 
 use tauri::AppHandle;
 
@@ -13,6 +13,12 @@ pub async fn app_info(app: AppHandle) -> AppInfo {
         arch: std::env::consts::ARCH.to_string(),
         elevated: is_elevated().await,
     }
+}
+
+/// 检查发布目录中的最新版本；无更新或无法访问时返回 null
+#[tauri::command]
+pub async fn check_update() -> Option<crate::update::UpdateInfo> {
+    crate::update::check().await
 }
 
 /// 打开日志目录，返回路径供界面展示

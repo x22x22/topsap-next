@@ -53,6 +53,7 @@ Credentials stay on your machine (system secure storage first: Windows Credentia
 - **Auto reconnect** — Exponential backoff (up to 5 attempts) when the tunnel drops unexpectedly; manual disconnects never trigger it, and it can be disabled in settings.
 - **Automatic kick-out** — When login returns `Ret=-40077`, the app follows the official flow: re-fetch `auth_param`, call `user_pswd_r` to kick the previous session, and continue logging in without re-entering credentials or relying on a local session marker.
 - **Adapter self-test** — Without touching the gateway, verifies admin rights, driver loading, adapter creation, address assignment, read-back, test route and bidirectional packet flow in seconds — separating adapter faults from protocol faults. The test adapter and routes are cleaned up afterwards; on Linux only a leftover `topsap0` carrying the test address `10.99.99.2` is removed, so an in-use connection adapter is never deleted.
+- **Version check** — On launch, reads the plain-text version file from the release folder; when it is newer than the installed version, an Update badge appears next to the sidebar version and opens a dialog with the current/latest versions and a download link. It stays silent when no update exists or the folder is unreachable, and never blocks connecting.
 - **Residue detection** — Older versions could leave a hosts block after an abrupt exit; the Diagnostics page can detect and remove it in one click.
 - **Connection profiles** — Save multiple gateway profiles (name, connection mode, probe timeout, address list), with several lines per profile; selecting a profile hides the gateway and port, and multi-line profiles can auto-pick the fastest line or show a latency-sorted picker before connecting. Import, export or clear profiles from the Settings window. When the app starts with no profiles and no saved gateway, it prompts you to import one in Settings > Connection profiles.
 - **Multi-line access** — Single line, multi-line preferred (probe all lines concurrently and pick the fastest) and multi-line backup (try in order).
@@ -220,6 +221,7 @@ Frontend and backend talk over Tauri IPC — no TCP ports listened on
 
 - **Certificate validation is skipped (protocol requirement)** — Gateway certificates are usually self-signed or expired, and the official client does not validate them either; this client also skips chain validation and sends no SNI. That means TLS cannot identify a man-in-the-middle — **use it only on trusted networks** and verify the gateway address through another channel.
 - **Credentials are Base64-encoded inside TLS** — The gateway expects `U/P` as Base64 of the username and password; Base64 is only an encoding, and the security boundary is the TLS channel itself.
+- **Version check** — On launch the app fetches the plain-text version file from the release folder only for comparison; it uploads no account, device or session data. An unreachable folder is skipped silently and never blocks login or connecting.
 - **Administrator rights are required** — Unavoidable for changing system network configuration; the app only touches routes, DNS and the virtual adapter.
 - **Password storage** — Stored in system secure storage first (Windows Credential Manager / macOS Keychain / Linux Secret Service); falls back to a machine-bound AES-256-GCM file. Passwords, captchas and `session_id` never enter logs or events; the abnormal-exit session marker stores only the gateway, port and `session_id`, encrypted with the same machine-bound AES-256-GCM key.
 - **Portable layout on Windows** — Settings, logs and WebView2 data live next to the executable: `config\` (settings, connection profiles, credential fallback, abnormal-exit session marker), `data\logs\` (`client.log`) and `webview\` (WebView2 user data, containing `EBWebView`). Keep the app in a writable folder; upgrades and reinstalls reuse these directories, so delete them manually for a full cleanup.
@@ -302,6 +304,7 @@ topsap-next/
 │   │   ├── lib.rs              App assembly (state / commands / tray / single instance)
 │   │   ├── platform.rs         Runtime detection (Windows 7 compatibility branch)
 │   │   ├── tls.rs              Shared TLS configuration
+│   │   ├── update.rs           Release-folder version check & comparison
 │   │   ├── dto.rs / settings.rs / secret_store.rs / proxy_bypass.rs
 │   │   ├── helper.rs            macOS root helper (TUN creation + allowlisted commands)
 │   │   ├── privileged.rs        macOS helper client and LaunchDaemon installer

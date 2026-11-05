@@ -218,6 +218,7 @@ TopSAP-Next/
 │       ├── privileged.rs        # macOS helper 客户端与 LaunchDaemon 安装
 │       ├── session_guard.rs     # 异常退出会话标记与下次启动补注销
 │       ├── shutdown.rs          # 系统关机/终止信号下的限时断开
+│       ├── update.rs            # 发布目录版本检查与版本比较
 │       ├── auth/{mod,client,error,http,json,model}.rs
 │       ├── protocol/{mod,frame,parser}.rs
 │       ├── tunnel/mod.rs
@@ -318,6 +319,7 @@ TLS 建连（不校验证书、不发 SNI）
 | `netcfg` | 网卡地址、路由注入/回读、DNS、旧版 hosts 残留清理 | `NetConfig`, `RouteEntry`, `CleanupLedger` |
 | `session` | 生命周期编排、事件广播、自动重连 | `Engine`, `EngineState`, `EngineEvent` |
 | `platform` | 运行环境探测，区分 Windows 7 与较新系统 | `is_windows7()` |
+| `update` | 读取发布目录中的纯文本版本号并与当前版本比较 | `UpdateInfo`, `check()` |
 | `settings` | 应用设置读写与校验 | `AppSettings` |
 | `proxy_bypass` | Windows / macOS / Linux 系统代理绕过列表同步；macOS 经 helper 执行 `networksetup` | `ProxyBypassStatus` |
 | `secret_store` | 跨平台 keyring（Windows 凭据管理器 / macOS 钥匙串 / Linux Secret Service）+ AES-GCM 回退 | `SecretStore` |

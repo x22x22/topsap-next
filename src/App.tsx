@@ -29,6 +29,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [elevationNoticeOpen, setElevationNoticeOpen] = useState(true);
   const [importNoticeOpen, setImportNoticeOpen] = useState(true);
+  const [updateOpen, setUpdateOpen] = useState(false);
   const [summary, setSummary] = useState<SessionSummary | null>(null);
   const [resolvedTheme, setResolvedTheme] = useState<"dark" | "light">("dark");
   const [collapsed, setCollapsed] = useState(
@@ -40,6 +41,13 @@ export default function App() {
   const disconnect = useDisconnect();
 
   const infoQuery = useQuery({ queryKey: queryKeys.appInfo, queryFn: api.appInfo });
+  const updateQuery = useQuery({
+    queryKey: ["update"],
+    queryFn: api.checkUpdate,
+    staleTime: Infinity,
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
   const settingsQuery = useQuery({
     queryKey: queryKeys.settings,
     queryFn: api.loadSettings,
@@ -155,6 +163,8 @@ export default function App() {
         theme={resolvedTheme}
         onToggleTheme={toggleTheme}
         settingsOpen={settingsOpen}
+        updateAvailable={Boolean(updateQuery.data)}
+        onUpdateClick={() => setUpdateOpen(true)}
       >
         {page === "connect" ? (
           <ConnectPage
@@ -254,6 +264,44 @@ export default function App() {
       >
         <p className="text-xs leading-relaxed text-muted">
           {t("导入后可直接选择网关与线路，无需每次手动填写。")}
+        </p>
+      </Modal>
+
+      <Modal
+        open={updateOpen && Boolean(updateQuery.data)}
+        title={t("发现新版本")}
+        description={
+          updateQuery.data
+            ? t("当前版本 v{current}，最新版本 v{latest}", {
+                current: updateQuery.data.current,
+                latest: updateQuery.data.latest,
+              })
+            : undefined
+        }
+        onClose={() => setUpdateOpen(false)}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setUpdateOpen(false)}>
+              {t("稍后")}
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => {
+                const url = updateQuery.data?.url;
+                if (!url) return;
+                void api.openUrl(url).then(
+                  () => setUpdateOpen(false),
+                  () => toast.error(t("无法打开下载页面")),
+                );
+              }}
+            >
+              {t("前往")}
+            </Button>
+          </>
+        }
+      >
+        <p className="text-xs leading-relaxed text-muted">
+          {t("建议更新到最新版本以获取修复与改进，点击「前往」打开下载页面。")}
         </p>
       </Modal>
 

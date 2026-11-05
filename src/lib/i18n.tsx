@@ -370,6 +370,13 @@ const EN: Record<string, string> = {
     "After importing, you can select a gateway and lines instead of entering them manually each time.",
   "稍后": "Later",
   "前往设置": "Open settings",
+  "可更新": "Update",
+  "发现新版本": "New version available",
+  "当前版本 v{current}，最新版本 v{latest}": "Current version v{current}, latest v{latest}",
+  "建议更新到最新版本以获取修复与改进，点击「前往」打开下载页面。":
+    "Update to the latest version for fixes and improvements. Click Download to open the download page.",
+  "前往": "Download",
+  "无法打开下载页面": "Unable to open the download page",
   // 诊断
   "残留检查": "Residue check",
   "旧版本异常退出可能留下 hosts 标记段，检测到后可一键清理":

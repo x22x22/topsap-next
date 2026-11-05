@@ -39,6 +39,8 @@ export function AppShell({
   theme,
   onToggleTheme,
   settingsOpen = false,
+  updateAvailable = false,
+  onUpdateClick,
   children,
 }: {
   page: PageId;
@@ -52,6 +54,8 @@ export function AppShell({
   theme: "dark" | "light";
   onToggleTheme: () => void;
   settingsOpen?: boolean;
+  updateAvailable?: boolean;
+  onUpdateClick?: () => void;
   children: ReactNode;
 }) {
   const { t, lang, toggleLang } = useI18n();
@@ -150,7 +154,20 @@ export function AppShell({
                 </div>
                 <div className="flex items-center justify-between gap-2">
                   <dt className="text-faint">{t("版本")}</dt>
-                  <dd className="font-mono text-muted">{version || "—"}</dd>
+                  <dd className="flex min-w-0 items-center justify-end gap-1.5 font-mono text-muted">
+                    <span className="truncate">{version || "—"}</span>
+                    {updateAvailable ? (
+                      <button
+                        type="button"
+                        onClick={onUpdateClick}
+                        title={t("发现新版本")}
+                        className="inline-flex shrink-0 items-center gap-1 rounded-md border border-accent/30 bg-accent-soft px-1.5 py-0.5 font-sans text-[10px] font-medium text-accent transition hover:border-accent/60"
+                      >
+                        <span className="h-1.5 w-1.5 rounded-full bg-accent" />
+                        {t("可更新")}
+                      </button>
+                    ) : null}
+                  </dd>
                 </div>
               </dl>
             </div>

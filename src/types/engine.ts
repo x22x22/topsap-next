@@ -21,6 +21,12 @@ export interface AppInfo {
   elevated: boolean;
 }
 
+export interface UpdateInfo {
+  current: string;
+  latest: string;
+  url: string;
+}
+
 export interface LoginForm {
   gateway: string;
   port?: number;
