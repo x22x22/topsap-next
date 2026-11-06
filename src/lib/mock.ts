@@ -229,10 +229,21 @@ async function handle(cmd: string, args?: Record<string, unknown>): Promise<unkn
       return "C:\\Program Files\\TopSAP Client\\data\\logs";
 
     case "check_residue":
-      return { hosts: false } satisfies ResidueReport;
+      return {
+        hosts: false,
+        utun_supported: false,
+        utuns: [],
+      } satisfies ResidueReport;
 
     case "purge_residue":
       return false;
+
+    case "cleanup_utun_residue":
+      return {
+        routes_removed: 0,
+        still_present: false,
+        message: "当前平台不支持清理 utun 残留",
+      };
 
     case "run_self_test": {
       await sleep(1400);

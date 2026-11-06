@@ -18,6 +18,7 @@ import type {
   SessionSummary,
   Stats,
   UpdateCheck,
+  UtunCleanupResult,
 } from "../types/engine";
 import { isMockMode, mockInvoke, mockListen } from "./mock";
 
@@ -89,6 +90,8 @@ export const api = {
   selfTest: () => call<SelfTestReport>("run_self_test"),
   checkResidue: () => call<ResidueReport>("check_residue"),
   purgeResidue: () => call<boolean>("purge_residue"),
+  cleanupUtunResidue: (name: string) =>
+    call<UtunCleanupResult>("cleanup_utun_residue", { name }),
 
   loadSettings: () => call<AppSettings>("load_settings"),
   saveSettings: (settings: AppSettings) => call<void>("save_settings", { settings }),

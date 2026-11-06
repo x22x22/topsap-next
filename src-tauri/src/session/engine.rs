@@ -230,6 +230,14 @@ impl Engine {
         self.lock().phase.connected()
     }
 
+    /// 当前连接使用的 TUN 接口名；未创建网卡时为空
+    pub fn tun_name(&self) -> Option<String> {
+        self.lock()
+            .tun
+            .as_ref()
+            .map(|tun| tun.interface_name().to_string())
+    }
+
     /// 是否处于连接流程中（含重连），用于拒绝并发的建卡操作
     pub fn is_busy(&self) -> bool {
         let inner = self.lock();

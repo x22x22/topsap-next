@@ -161,6 +161,7 @@ pub fn route_lookup_matches(text: &str, dest: &str, prefix: u8, ifname: &str) ->
 pub struct RouteTableEntry {
     pub dest: String,
     pub prefix: u8,
+    pub mask: String,
     pub gateway: String,
     pub ifname: String,
 }
@@ -183,9 +184,78 @@ pub fn parse_route_table(text: &str) -> Vec<RouteTableEntry> {
         out.push(RouteTableEntry {
             dest: u32_to_ipv4(dest),
             prefix,
+            mask: prefix_mask(prefix),
             gateway: fields[1].to_string(),
             ifname: ifname.to_string(),
         });
+    }
+    out
+}
+
+/// `ifconfig -a` 中带 IPv4 地址的 utun 接口
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IfconfigUtun {
+    pub name: String,
+    pub address: String,
+    pub peer: String,
+    pub mtu: u32,
+}
+
+/// 解析 `ifconfig -a`，只返回带 IPv4 地址的 utun 接口
+pub fn parse_ifconfig_utuns(text: &str) -> Vec<IfconfigUtun> {
+    let mut out = Vec::new();
+    let mut current: Option<IfconfigUtun> = None;
+
+    for raw in text.lines() {
+        if !raw.starts_with(' ') && !raw.starts_with('\t') {
+            if let Some(item) = current.take() {
+                if !item.address.is_empty() {
+                    out.push(item);
+                }
+            }
+            let Some(name) = raw.split(':').next() else {
+                continue;
+            };
+            if !name.starts_with("utun") {
+                continue;
+            }
+            let fields: Vec<&str> = raw.split_whitespace().collect();
+            let mtu = fields
+                .iter()
+                .position(|field| *field == "mtu")
+                .and_then(|index| fields.get(index + 1))
+                .and_then(|value| value.parse::<u32>().ok())
+                .unwrap_or(0);
+            current = Some(IfconfigUtun {
+                name: name.to_string(),
+                address: String::new(),
+                peer: String::new(),
+                mtu,
+            });
+            continue;
+        }
+
+        let Some(item) = current.as_mut() else {
+            continue;
+        };
+        let Some(rest) = raw.trim().strip_prefix("inet ") else {
+            continue;
+        };
+        let fields: Vec<&str> = rest.split_whitespace().collect();
+        item.address = fields.first().copied().unwrap_or_default().to_string();
+        if let Some(index) = fields.iter().position(|field| *field == "-->") {
+            item.peer = fields
+                .get(index + 1)
+                .copied()
+                .unwrap_or_default()
+                .to_string();
+        }
+    }
+
+    if let Some(item) = current {
+        if !item.address.is_empty() {
+            out.push(item);
+        }
     }
     out
 }
@@ -229,6 +299,16 @@ pub fn find_route_conflicts(
         }
     }
     out
+}
+
+/// 前缀长度 -> 点分十进制掩码
+fn prefix_mask(prefix: u8) -> String {
+    let bits = if prefix == 0 {
+        0
+    } else {
+        u32::MAX << (32 - prefix.min(32))
+    };
+    u32_to_ipv4(bits)
 }
 
 fn parse_netstat_destination(text: &str) -> Option<(u32, u8)> {
@@ -491,15 +571,46 @@ mod tests {
         assert_eq!(table[0].dest, "0.0.0.0");
         assert_eq!(table[0].prefix, 0);
         assert_eq!(table[0].ifname, "en7");
+        assert_eq!(table[0].mask, "0.0.0.0");
         assert_eq!(table[1].dest, "8.130.175.152");
         assert_eq!(table[1].prefix, 32);
+        assert_eq!(table[1].mask, "255.255.255.255");
         assert_eq!(table[2].dest, "10.10.20.0");
         assert_eq!(table[2].prefix, 23);
+        assert_eq!(table[2].mask, "255.255.254.0");
         assert_eq!(table[5].dest, "127.0.0.0");
         assert_eq!(table[5].prefix, 8);
         assert_eq!(table[6].dest, "192.168.1.0");
         assert_eq!(table[6].prefix, 24);
         assert_eq!(table[6].gateway, "link#12");
+    }
+
+    #[test]
+    fn 解析_ifconfig_只保留带地址的_utun() {
+        let text = concat!(
+            "lo0: flags=8049<UP,LOOPBACK,RUNNING,MULTICAST> mtu 16384\n",
+            "    inet 127.0.0.1 netmask 0xff000000\n",
+            "utun8: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1500\n",
+            "    inet 172.21.8.108 --> 172.21.8.107 netmask 0xfffff800\n",
+            "utun9: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1400\n",
+            "    inet6 fe80::1%utun9 prefixlen 64\n",
+            "gif0: flags=8010<POINTOPOINT,MULTICAST> mtu 1280\n",
+        );
+        let utuns = parse_ifconfig_utuns(text);
+        assert_eq!(utuns.len(), 1);
+        assert_eq!(utuns[0].name, "utun8");
+        assert_eq!(utuns[0].address, "172.21.8.108");
+        assert_eq!(utuns[0].peer, "172.21.8.107");
+        assert_eq!(utuns[0].mtu, 1500);
+    }
+
+    #[test]
+    fn 解析_ifconfig_无_inet_地址时忽略() {
+        let text = concat!(
+            "utun0: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1380\n",
+            "    inet6 fe80::1%utun0 prefixlen 64\n",
+        );
+        assert!(parse_ifconfig_utuns(text).is_empty());
     }
 
     #[test]

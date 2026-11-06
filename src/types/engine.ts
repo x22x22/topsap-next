@@ -179,8 +179,25 @@ export interface ProxyBypassStatus {
   message: string;
 }
 
+export interface UtunResidue {
+  name: string;
+  address: string;
+  peer: string;
+  mtu: number;
+  route_count: number;
+  active: boolean;
+}
+
 export interface ResidueReport {
   hosts: boolean;
+  utun_supported: boolean;
+  utuns: UtunResidue[];
+}
+
+export interface UtunCleanupResult {
+  routes_removed: number;
+  still_present: boolean;
+  message: string;
 }
 
 export type EngineEvent =

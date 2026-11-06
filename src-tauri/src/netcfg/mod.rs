@@ -89,6 +89,57 @@ pub async fn route_conflicts(list: &[RouteEntry]) -> Vec<RouteConflict> {
     }
 }
 
+/// 带 IPv4 地址的 utun 接口及关联路由数量
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UtunInfo {
+    pub name: String,
+    pub address: String,
+    pub peer: String,
+    pub mtu: u32,
+    pub route_count: usize,
+}
+
+/// utun 清理结果
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UtunCleanup {
+    pub routes_removed: usize,
+    pub still_present: bool,
+    pub message: String,
+}
+
+/// 列出带 IPv4 地址的 utun 接口；非 macOS 平台返回空列表。
+pub async fn utun_interfaces() -> Vec<UtunInfo> {
+    #[cfg(target_os = "macos")]
+    {
+        unix::utun_interfaces().await
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Vec::new()
+    }
+}
+
+/// 关闭指定 utun 并删除其关联路由；仅 macOS 支持。
+pub async fn cleanup_utun(name: &str) -> Result<UtunCleanup, String> {
+    #[cfg(target_os = "macos")]
+    {
+        unix::cleanup_utun(name).await
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = name;
+        Err("当前平台不支持清理 utun 残留".to_string())
+    }
+}
+
+/// 判断名称是否为 utun 接口名，避免清理命令被用于其他网卡
+pub fn is_utun_name(name: &str) -> bool {
+    let Some(suffix) = name.strip_prefix("utun") else {
+        return false;
+    };
+    !suffix.is_empty() && suffix.chars().all(|ch| ch.is_ascii_digit())
+}
+
 impl RouteReport {
     pub fn all_ok(&self) -> bool {
         self.total == 0 || self.ok == self.total

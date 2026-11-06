@@ -9,13 +9,13 @@ use crate::auth::RouteEntry;
 
 #[cfg(target_os = "macos")]
 use super::macos_text::{
-    find_route_conflicts, ipv4_only, parse_dns_servers, parse_network_service_order,
-    parse_route_table, parse_router_info, parse_scutil_dns, route_lookup_matches,
-    route_probe_address,
+    find_route_conflicts, ipv4_only, parse_dns_servers, parse_ifconfig_utuns,
+    parse_network_service_order, parse_route_table, parse_router_info, parse_scutil_dns,
+    route_lookup_matches, route_probe_address, RouteTableEntry,
 };
-#[cfg(target_os = "macos")]
-use super::RouteConflict;
 use super::{hosts, shell, NetError, RouteReport};
+#[cfg(target_os = "macos")]
+use super::{RouteConflict, UtunCleanup, UtunInfo};
 
 /// `networksetup setdnsservers` 的参数上限：helper 只允许「命令 + 服务名 + 8 个地址」
 #[cfg(target_os = "macos")]
@@ -537,11 +537,133 @@ impl NetConfig {
 /// 读取当前路由表，找出与待注入网段完全相同的其他接口路由
 #[cfg(target_os = "macos")]
 pub(crate) async fn route_conflicts(list: &[RouteEntry]) -> Vec<RouteConflict> {
-    let out = shell::run_local("/usr/sbin/netstat", &["-rn", "-f", "inet"]).await;
+    find_route_conflicts(list, &route_table().await)
+}
+
+/// 列出带 IPv4 地址的 utun 接口，并统计每个接口关联的路由数量
+#[cfg(target_os = "macos")]
+pub(crate) async fn utun_interfaces() -> Vec<UtunInfo> {
+    let out = shell::run_local("/sbin/ifconfig", &["-a"]).await;
     if !out.ok {
         return Vec::new();
     }
-    find_route_conflicts(list, &parse_route_table(&out.stdout))
+    let parsed = parse_ifconfig_utuns(&out.stdout);
+    if parsed.is_empty() {
+        return Vec::new();
+    }
+    let table = route_table().await;
+    parsed
+        .into_iter()
+        .map(|item| {
+            let route_count = table
+                .iter()
+                .filter(|entry| entry.ifname == item.name)
+                .count();
+            UtunInfo {
+                name: item.name,
+                address: item.address,
+                peer: item.peer,
+                mtu: item.mtu,
+                route_count,
+            }
+        })
+        .collect()
+}
+
+/// 关闭指定 utun 并删除其关联路由；仅允许 utun* 名称
+#[cfg(target_os = "macos")]
+pub(crate) async fn cleanup_utun(name: &str) -> Result<UtunCleanup, String> {
+    if !super::is_utun_name(name) {
+        return Err("只允许清理 utun* 虚拟网卡".to_string());
+    }
+    let present_before = shell::run_local("/sbin/ifconfig", &[name]).await.ok;
+    if !present_before {
+        return Ok(UtunCleanup {
+            routes_removed: 0,
+            still_present: false,
+            message: format!("{name} 已不存在"),
+        });
+    }
+
+    let targets: Vec<RouteTableEntry> = route_table()
+        .await
+        .into_iter()
+        .filter(|entry| entry.ifname == name)
+        .collect();
+    let before = targets.len();
+
+    let down = shell::run("ifconfig", &[name, "down"]).await;
+    for entry in &targets {
+        let out = shell::run(
+            "route",
+            &[
+                "-n",
+                "delete",
+                "-net",
+                &entry.dest,
+                "-netmask",
+                &entry.mask,
+                "-interface",
+                name,
+            ],
+        )
+        .await;
+        if !out.ok {
+            let _ = shell::run(
+                "route",
+                &[
+                    "-n",
+                    "delete",
+                    "-net",
+                    &entry.dest,
+                    "-netmask",
+                    &entry.mask,
+                    &entry.gateway,
+                ],
+            )
+            .await;
+        }
+    }
+
+    let remaining = route_table()
+        .await
+        .iter()
+        .filter(|entry| entry.ifname == name)
+        .count();
+    let present = shell::run_local("/sbin/ifconfig", &[name]).await.ok;
+    if !down.ok && remaining > 0 && remaining == before {
+        let detail: String = down.text().trim().chars().take(200).collect();
+        return Err(if detail.is_empty() {
+            format!("{name} 关闭失败，仍有 {remaining} 条路由")
+        } else {
+            format!("{name} 关闭失败，仍有 {remaining} 条路由：{detail}")
+        });
+    }
+    let routes_removed = before.saturating_sub(remaining);
+    let message = if !present {
+        format!("{name} 已移除，关联路由已清理")
+    } else if remaining == 0 {
+        format!("{name} 已关闭，关联路由已清理")
+    } else if down.ok {
+        format!("{name} 仍存在，残留 {remaining} 条路由；可能仍有进程持有该隧道")
+    } else {
+        format!("{name} 关闭失败，仍有 {remaining} 条路由")
+    };
+    Ok(UtunCleanup {
+        routes_removed,
+        still_present: present,
+        message,
+    })
+}
+
+#[cfg(target_os = "macos")]
+async fn route_table() -> Vec<RouteTableEntry> {
+    let out = shell::run_local("/usr/sbin/netstat", &["-rn", "-f", "inet"]).await;
+    if out.ok {
+        parse_route_table(&out.stdout)
+    } else {
+        Vec::new()
+    }
 }
 
 /// 删除一条冲突路由；优先按接口删除，失败再按网关删除，删除后回读确认

@@ -111,6 +111,7 @@ pub fn run() {
             commands::diag::run_self_test,
             commands::diag::check_residue,
             commands::diag::purge_residue,
+            commands::diag::cleanup_utun_residue,
             commands::settings::load_settings,
             commands::settings::save_settings,
             commands::settings::proxy_bypass_status,

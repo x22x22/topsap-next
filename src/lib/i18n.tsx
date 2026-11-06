@@ -402,8 +402,27 @@ const EN: Record<string, string> = {
     "Hosts residue detected; you can clean it now",
   "检查完成，未发现 hosts 残留":
     "Check complete; no hosts residue found",
-  "强杀进程不会触发清理流程，可能残留路由；旧版本遗留的 hosts 标记段也可在此清理。":
-    "Force-killing the process skips cleanup and may leave routes behind; any legacy hosts block can also be cleaned here.",
+  "强杀进程不会触发清理流程，可能残留路由与 utun 网卡；旧版本遗留的 hosts 标记段也可在此清理。":
+    "Force-killing the process skips cleanup and may leave routes and utun interfaces behind; any legacy hosts block can also be cleaned here.",
+  "utun 虚拟网卡残留": "utun interface residue",
+  "存在 {n} 个": "{n} found",
+  "系统里仍有带 IPv4 地址的 utun 虚拟网卡；确认不再使用后可关闭并删除其关联路由。":
+    "utun interfaces with an IPv4 address are still present; close them and remove their routes once you are sure they are no longer in use.",
+  "未发现带 IPv4 地址的 utun 虚拟网卡。":
+    "No utun interface with an IPv4 address was found.",
+  "路由 {n} 条": "{n} routes",
+  "当前连接正在使用，断开后可清理":
+    "In use by the current connection; disconnect before cleaning up",
+  "使用中": "In use",
+  "清理 utun 残留": "Clean up utun residue",
+  "将关闭 {name} 并删除其关联路由，可能中断仍在运行的 VPN。确定继续？":
+    "This closes {name} and removes its routes, which may interrupt a running VPN. Continue?",
+  "接口仍存在，可能仍有进程持有该隧道":
+    "The interface is still present; a process may still own the tunnel",
+  "已清理 utun 残留": "utun residue cleaned",
+  "检测到 utun 残留，可点击清理":
+    "utun residue detected; you can clean it now",
+  "检查完成，未发现残留": "Check complete; no residue found",
   // 路由冲突
   "检测到路由冲突": "Route conflicts detected",
   "以下网段已被其他接口占用（可能是其他 VPN、旧会话残留或物理网络同网段），继续连接需要先删除这些路由":

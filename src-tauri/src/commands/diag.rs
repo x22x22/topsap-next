@@ -81,15 +81,49 @@ pub async fn run_self_test(
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct UtunResidueDto {
+    pub name: String,
+    pub address: String,
+    pub peer: String,
+    pub mtu: u32,
+    pub route_count: usize,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ResidueReport {
     pub hosts: bool,
+    pub utun_supported: bool,
+    pub utuns: Vec<UtunResidueDto>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct UtunCleanupDto {
+    pub routes_removed: usize,
+    pub still_present: bool,
+    pub message: String,
 }
 
 #[tauri::command]
-pub async fn check_residue() -> ResidueReport {
-    ResidueReport {
+pub async fn check_residue(state: State<'_, AppState>) -> Result<ResidueReport, String> {
+    let active = state.engine.tun_name();
+    let utuns = netcfg::utun_interfaces()
+        .await
+        .into_iter()
+        .map(|item| UtunResidueDto {
+            active: active.as_deref() == Some(item.name.as_str()),
+            name: item.name,
+            address: item.address,
+            peer: item.peer,
+            mtu: item.mtu,
+            route_count: item.route_count,
+        })
+        .collect();
+    Ok(ResidueReport {
         hosts: netcfg::has_hosts_residue().await,
-    }
+        utun_supported: cfg!(target_os = "macos"),
+        utuns,
+    })
 }
 
 #[tauri::command]
@@ -97,4 +131,32 @@ pub async fn purge_residue() -> Result<bool, String> {
     netcfg::purge_hosts_residue()
         .await
         .map_err(|e| e.to_string())
+}
+
+/// 关闭指定 utun 并删除其关联路由；拒绝正在使用或自检中的接口
+#[tauri::command]
+pub async fn cleanup_utun_residue(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<UtunCleanupDto, String> {
+    let name = name.trim().to_string();
+    if !netcfg::is_utun_name(&name) {
+        return Err("只允许清理 utun* 虚拟网卡".to_string());
+    }
+    if self_test_running() {
+        return Err("自检进行中，暂时无法清理 utun 残留".to_string());
+    }
+    if state.engine.tun_name().as_deref() == Some(name.as_str()) {
+        return Err("该虚拟网卡正在使用，请先断开连接".to_string());
+    }
+
+    let result = netcfg::cleanup_utun(&name).await?;
+    state
+        .engine
+        .report_log(format!("清理 utun 残留：{}", result.message));
+    Ok(UtunCleanupDto {
+        routes_removed: result.routes_removed,
+        still_present: result.still_present,
+        message: result.message,
+    })
 }

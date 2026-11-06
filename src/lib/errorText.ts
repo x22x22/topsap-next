@@ -90,6 +90,30 @@ export function localizeError(message: string): string {
     "Route conflict confirmation timed out after $1 seconds",
   );
   text = text.replace(
+    /^只允许清理 utun\* 虚拟网卡$/,
+    "Only utun* virtual interfaces can be cleaned up",
+  );
+  text = text.replace(
+    /^自检进行中，暂时无法清理 utun 残留$/,
+    "The self-test is running; utun residue cannot be cleaned up right now",
+  );
+  text = text.replace(
+    /^该虚拟网卡正在使用，请先断开连接$/,
+    "This virtual interface is in use; disconnect first",
+  );
+  text = text.replace(
+    /^当前平台不支持清理 utun 残留$/,
+    "This platform does not support utun residue cleanup",
+  );
+  text = text.replace(
+    /^(.+) 关闭失败，仍有 (\d+) 条路由：(.+)$/,
+    "Failed to close $1; $2 routes remain: $3",
+  );
+  text = text.replace(
+    /^(.+) 关闭失败，仍有 (\d+) 条路由$/,
+    "Failed to close $1; $2 routes remain",
+  );
+  text = text.replace(
     /^配置网卡地址失败（当前：(.+)）；(请确认特权 helper 已安装，或以 root\/sudo 运行|请以 root 运行（sudo \/usr\/bin\/topsap-client）)$/,
     (_match, current: string, hint: string) => {
       const action = hint.startsWith("请确认")
