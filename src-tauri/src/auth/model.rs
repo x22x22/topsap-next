@@ -549,34 +549,34 @@ mod tests {
     #[test]
     fn 对端地址_按_vip_减一推导() {
         assert_eq!(
-            virtual_peer("172.21.8.108", "255.255.248.0").as_deref(),
-            Some("172.21.8.107")
+            virtual_peer("198.51.100.108", "255.255.248.0").as_deref(),
+            Some("198.51.100.107")
         );
         assert_eq!(
-            virtual_peer("172.21.15.82", "255.255.248.0").as_deref(),
-            Some("172.21.15.81")
+            virtual_peer("203.0.113.82", "255.255.248.0").as_deref(),
+            Some("203.0.113.81")
         );
         assert_eq!(
-            virtual_peer("10.99.99.2", "255.255.255.0").as_deref(),
-            Some("10.99.99.1")
+            virtual_peer("192.0.2.2", "255.255.255.0").as_deref(),
+            Some("192.0.2.1")
         );
     }
 
     #[test]
     fn 对端地址_边界与非法输入() {
         assert_eq!(
-            virtual_peer("10.0.0.1", "255.255.255.0").as_deref(),
-            Some("10.0.0.2")
+            virtual_peer("192.0.2.1", "255.255.255.0").as_deref(),
+            Some("192.0.2.2")
         );
-        assert_eq!(virtual_peer("10.0.0.0", "255.255.255.0"), None);
-        assert_eq!(virtual_peer("10.0.0.255", "255.255.255.0"), None);
+        assert_eq!(virtual_peer("192.0.2.0", "255.255.255.0"), None);
+        assert_eq!(virtual_peer("192.0.2.255", "255.255.255.0"), None);
         assert_eq!(
-            virtual_peer("10.0.0.2", "255.255.255.254").as_deref(),
-            Some("10.0.0.3")
+            virtual_peer("192.0.2.2", "255.255.255.254").as_deref(),
+            Some("192.0.2.3")
         );
-        assert_eq!(virtual_peer("10.0.0.2", "255.255.255.255"), None);
+        assert_eq!(virtual_peer("192.0.2.2", "255.255.255.255"), None);
         assert_eq!(virtual_peer("bad", "255.255.255.0"), None);
-        assert_eq!(virtual_peer("10.0.0.2", "255.0.255.0"), None);
+        assert_eq!(virtual_peer("192.0.2.2", "255.0.255.0"), None);
     }
 
     #[test]

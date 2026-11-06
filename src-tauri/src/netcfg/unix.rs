@@ -789,14 +789,14 @@ mod tests {
 
     #[test]
     fn 解析_linux_ip_addr_输出() {
-        let text = "2: topsap0: <POINTOPOINT,UP> mtu 1400\n    inet 10.8.0.10/24 scope global topsap0\n       valid_lft forever\n";
-        assert_eq!(parse_interface_addresses(text), vec!["10.8.0.10"]);
+        let text = "2: topsap0: <POINTOPOINT,UP> mtu 1400\n    inet 198.51.100.10/24 scope global topsap0\n       valid_lft forever\n";
+        assert_eq!(parse_interface_addresses(text), vec!["198.51.100.10"]);
     }
 
     #[test]
     fn 解析_macos_ifconfig_输出() {
-        let text = "utun0: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1400\n\tinet 10.8.0.10 --> 10.8.0.10 netmask 0xffffff00\n";
-        assert_eq!(parse_interface_addresses(text), vec!["10.8.0.10"]);
+        let text = "utun0: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1400\n\tinet 198.51.100.10 --> 198.51.100.10 netmask 0xffffff00\n";
+        assert_eq!(parse_interface_addresses(text), vec!["198.51.100.10"]);
     }
 
     #[test]

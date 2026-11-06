@@ -176,7 +176,7 @@ mod tests {
             session_id: "session-1".to_string(),
             user: "demo".to_string(),
             utun: Some("utun8".to_string()),
-            vip: Some("172.21.8.108".to_string()),
+            vip: Some("198.51.100.108".to_string()),
             created_at: 1,
         };
         let text = serde_json::to_string(&pending).unwrap();
@@ -184,7 +184,7 @@ mod tests {
         assert_eq!(decoded.gateway, pending.gateway);
         assert_eq!(decoded.session_id, pending.session_id);
         assert_eq!(decoded.utun.as_deref(), Some("utun8"));
-        assert_eq!(decoded.vip.as_deref(), Some("172.21.8.108"));
+        assert_eq!(decoded.vip.as_deref(), Some("198.51.100.108"));
     }
 
     #[test]

@@ -556,13 +556,13 @@ mod tests {
     const ROUTE_TABLE: &str = "Routing tables\n\n\
         Internet:\n\
         Destination        Gateway            Flags        Netif Expire\n\
-        default            10.186.33.1        UGScg          en7\n\
-        8.130.175.152/32   172.21.8.107       UGSc           utun8\n\
-        10.10.20/23        172.21.8.107       UGSc           utun8\n\
-        10.22.1/24         172.21.8.107       UGSc           utun8\n\
-        10.22.1.10/32      172.21.8.107       UGSc           utun8\n\
+        default            192.0.2.1          UGScg          en7\n\
+        203.0.113.10/32    198.51.100.107     UGSc           utun8\n\
+        203.0.112/23       198.51.100.107     UGSc           utun8\n\
+        198.51.100/24      198.51.100.107     UGSc           utun8\n\
+        198.51.100.10/32   198.51.100.107     UGSc           utun8\n\
         127                127.0.0.1          UCS            lo0\n\
-        192.168.1          link#12            UCS            en0      !\n";
+        192.0.2/24         link#12            UCS            en0      !\n";
 
     #[test]
     fn 解析路由表_识别目标前缀与接口() {
@@ -572,15 +572,15 @@ mod tests {
         assert_eq!(table[0].prefix, 0);
         assert_eq!(table[0].ifname, "en7");
         assert_eq!(table[0].mask, "0.0.0.0");
-        assert_eq!(table[1].dest, "8.130.175.152");
+        assert_eq!(table[1].dest, "203.0.113.10");
         assert_eq!(table[1].prefix, 32);
         assert_eq!(table[1].mask, "255.255.255.255");
-        assert_eq!(table[2].dest, "10.10.20.0");
+        assert_eq!(table[2].dest, "203.0.112.0");
         assert_eq!(table[2].prefix, 23);
         assert_eq!(table[2].mask, "255.255.254.0");
         assert_eq!(table[5].dest, "127.0.0.0");
         assert_eq!(table[5].prefix, 8);
-        assert_eq!(table[6].dest, "192.168.1.0");
+        assert_eq!(table[6].dest, "192.0.2.0");
         assert_eq!(table[6].prefix, 24);
         assert_eq!(table[6].gateway, "link#12");
     }
@@ -591,7 +591,7 @@ mod tests {
             "lo0: flags=8049<UP,LOOPBACK,RUNNING,MULTICAST> mtu 16384\n",
             "    inet 127.0.0.1 netmask 0xff000000\n",
             "utun8: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1500\n",
-            "    inet 172.21.8.108 --> 172.21.8.107 netmask 0xfffff800\n",
+            "    inet 198.51.100.108 --> 198.51.100.107 netmask 0xfffff800\n",
             "utun9: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1400\n",
             "    inet6 fe80::1%utun9 prefixlen 64\n",
             "gif0: flags=8010<POINTOPOINT,MULTICAST> mtu 1280\n",
@@ -599,8 +599,8 @@ mod tests {
         let utuns = parse_ifconfig_utuns(text);
         assert_eq!(utuns.len(), 1);
         assert_eq!(utuns[0].name, "utun8");
-        assert_eq!(utuns[0].address, "172.21.8.108");
-        assert_eq!(utuns[0].peer, "172.21.8.107");
+        assert_eq!(utuns[0].address, "198.51.100.108");
+        assert_eq!(utuns[0].peer, "198.51.100.107");
         assert_eq!(utuns[0].mtu, 1500);
     }
 
@@ -617,25 +617,25 @@ mod tests {
     fn 路由冲突_只匹配目标与前缀完全一致() {
         let table = parse_route_table(ROUTE_TABLE);
         let routes = vec![
-            route_entry("10.22.1.0", "255.255.255.0", 24),
-            route_entry("10.22.2.0", "255.255.255.0", 24),
-            route_entry("10.22.1.10", "255.255.255.255", 32),
-            route_entry("10.10.20.0", "255.255.254.0", 23),
+            route_entry("198.51.100.0", "255.255.255.0", 24),
+            route_entry("198.51.101.0", "255.255.255.0", 24),
+            route_entry("198.51.100.10", "255.255.255.255", 32),
+            route_entry("203.0.112.0", "255.255.254.0", 23),
         ];
         let conflicts = find_route_conflicts(&routes, &table);
         assert_eq!(conflicts.len(), 3);
-        assert_eq!(conflicts[0].dest, "10.22.1.0");
+        assert_eq!(conflicts[0].dest, "198.51.100.0");
         assert_eq!(conflicts[0].ifname, "utun8");
         assert_eq!(conflicts[0].kind, RouteConflictKind::Tunnel);
-        assert_eq!(conflicts[1].dest, "10.22.1.10");
+        assert_eq!(conflicts[1].dest, "198.51.100.10");
         assert_eq!(conflicts[1].prefix, 32);
-        assert_eq!(conflicts[2].dest, "10.10.20.0");
+        assert_eq!(conflicts[2].dest, "203.0.112.0");
     }
 
     #[test]
     fn 路由冲突_区分隧道物理与环回接口() {
         let table = parse_route_table(ROUTE_TABLE);
-        let routes = vec![route_entry("192.168.1.0", "255.255.255.0", 24)];
+        let routes = vec![route_entry("192.0.2.0", "255.255.255.0", 24)];
         let conflicts = find_route_conflicts(&routes, &table);
         assert_eq!(conflicts.len(), 1);
         assert_eq!(conflicts[0].kind, RouteConflictKind::Physical);
@@ -648,7 +648,7 @@ mod tests {
     #[test]
     fn 路由冲突_无精确匹配时为空() {
         let table = parse_route_table(ROUTE_TABLE);
-        let routes = vec![route_entry("10.22.0.0", "255.255.0.0", 16)];
+        let routes = vec![route_entry("198.51.102.0", "255.255.255.0", 24)];
         assert!(find_route_conflicts(&routes, &table).is_empty());
     }
 }

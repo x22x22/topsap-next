@@ -87,10 +87,10 @@ describe("localizeSelfTestDetail", () => {
     );
     expect(
       localizeSelfTestDetail(
-        "10.98.0.0/255.255.0.0 已被 utun8（172.21.8.107）占用；请先在诊断页清理 utun 残留或退出其他 VPN",
+        "10.98.0.0/255.255.0.0 已被 utun8（198.51.100.107）占用；请先在诊断页清理 utun 残留或退出其他 VPN",
       ),
     ).toBe(
-      "10.98.0.0/255.255.0.0 is already owned by utun8 (172.21.8.107); clean up utun residue on the Diagnostics page or quit the other VPN first",
+      "10.98.0.0/255.255.0.0 is already owned by utun8 (198.51.100.107); clean up utun residue on the Diagnostics page or quit the other VPN first",
     );
     expect(localizeSelfTestDetail("已跳过；处理冲突后重新运行自检")).toBe(
       "Skipped; resolve the conflict and run the self-test again",
