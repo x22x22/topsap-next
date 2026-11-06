@@ -403,8 +403,6 @@ const EN: Record<string, string> = {
   "检查失败": "Check failed",
   "检测到 hosts 残留，可点击清理":
     "Hosts residue detected; you can clean it now",
-  "检查完成，未发现 hosts 残留":
-    "Check complete; no hosts residue found",
   "强杀进程不会触发清理流程，可能残留路由与 utun 网卡；旧版本遗留的 hosts 标记段也可在此清理。":
     "Force-killing the process skips cleanup and may leave routes and utun interfaces behind; any legacy hosts block can also be cleaned here.",
   "utun 虚拟网卡残留": "utun interface residue",

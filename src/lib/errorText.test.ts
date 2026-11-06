@@ -132,9 +132,9 @@ describe("localizeError", () => {
       "Failed to create the virtual adapter: access denied; administrator privileges are required (Win32 5)",
     );
     expect(
-      localizeError("设置网卡地址失败（当前：无地址；第1轮 netsh=fail，第2轮 powershell=fail）"),
+      localizeError("设置网卡地址失败（当前：无地址；第1轮 netsh=fail，第2轮 netsh=fail）"),
     ).toBe(
-      "Failed to set the adapter address (current: no address; round 1 netsh=fail, round 2 powershell=fail)",
+      "Failed to set the adapter address (current: no address; round 1 netsh=fail, round 2 netsh=fail)",
     );
     expect(localizeError("读取 hosts 失败：permission denied")).toBe(
       "Failed to read hosts: permission denied",

@@ -304,7 +304,7 @@ TCP/TLS 连接 gateway:port
 
 虚拟网卡使用 `net_param.vip_v4` / `vip_mask`。MTU 取 1400（官方客户端行为）。
 
-macOS 的 utun 是点对点接口：本机地址为 VIP，对端地址按 **VIP-1** 推导（官方客户端实测 `ifconfig` 显示 `inet VIP --> VIP-1`），资源路由的下一跳同样使用 VIP-1。不能把 VIP 同时当作对端和网关：`route get` 回读会通过，但内核不会把系统流量真正投递到 utun。Windows 使用 Wintun on-link，Linux 使用 `ip route ... dev`，均不需要对端地址。
+macOS 的 utun 是点对点接口：本机地址为 VIP，对端地址按 **VIP-1** 推导（官方客户端实测 `ifconfig` 显示 `inet VIP --> VIP-1`），资源路由的下一跳同样使用 VIP-1。不能把 VIP 同时当作对端和网关：`route get` 回读会通过，但内核不会把系统流量真正投递到 utun。Windows 使用 Wintun，资源路由 NextHop 为 VIP-1（已与官方对齐）；Linux 使用 `ip route ... dev`，均不需要 utun 式的点对点对端配置。
 
 ### 4.2 路由
 
