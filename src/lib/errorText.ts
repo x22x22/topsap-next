@@ -113,6 +113,19 @@ export function localizeError(message: string): string {
     /^(.+) 关闭失败，仍有 (\d+) 条路由$/,
     "Failed to close $1; $2 routes remain",
   );
+  text = text.replace(/^(.+) 已不存在$/, "$1 no longer exists");
+  text = text.replace(
+    /^(.+) 已移除，关联路由已清理$/,
+    "$1 was removed and its routes were cleaned up",
+  );
+  text = text.replace(
+    /^(.+) 已关闭，关联路由已清理$/,
+    "$1 was closed and its routes were cleaned up",
+  );
+  text = text.replace(
+    /^(.+) 仍存在，残留 (\d+) 条路由；可能仍有进程持有该隧道$/,
+    "$1 is still present with $2 routes left; a process may still own the tunnel",
+  );
   text = text.replace(
     /^配置网卡地址失败（当前：(.+)）；(请确认特权 helper 已安装，或以 root\/sudo 运行|请以 root 运行（sudo \/usr\/bin\/topsap-client）)$/,
     (_match, current: string, hint: string) => {

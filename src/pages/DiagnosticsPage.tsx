@@ -7,6 +7,7 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { SelfTestPanel } from "../components/SelfTestPanel";
 import { Badge, Button, Card, CardHeader, Spinner, cn } from "../components/ui";
 import { api } from "../lib/api";
+import { localizeError } from "../lib/errorText";
 import { firstLine } from "../lib/format";
 import { useI18n } from "../lib/i18n";
 import { queryKeys } from "../lib/query";
@@ -38,7 +39,7 @@ export function DiagnosticsPage() {
       void queryClient.invalidateQueries({ queryKey: queryKeys.residue });
       setPendingUtun(null);
       const notify = result.still_present ? toast.warning : toast.success;
-      notify(result.message || t("已清理 utun 残留"), {
+      notify(localizeError(result.message) || t("已清理 utun 残留"), {
         description: result.still_present
           ? t("接口仍存在，可能仍有进程持有该隧道")
           : undefined,

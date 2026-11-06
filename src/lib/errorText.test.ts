@@ -109,6 +109,24 @@ describe("localizeError", () => {
     );
   });
 
+  it("翻译 utun 残留清理结果", () => {
+    expect(localizeError("utun8 已不存在")).toBe("utun8 no longer exists");
+    expect(localizeError("utun8 已移除，关联路由已清理")).toBe(
+      "utun8 was removed and its routes were cleaned up",
+    );
+    expect(localizeError("utun8 已关闭，关联路由已清理")).toBe(
+      "utun8 was closed and its routes were cleaned up",
+    );
+    expect(
+      localizeError("utun8 仍存在，残留 3 条路由；可能仍有进程持有该隧道"),
+    ).toBe(
+      "utun8 is still present with 3 routes left; a process may still own the tunnel",
+    );
+    expect(localizeError("utun8 关闭失败，仍有 3 条路由：permission denied")).toBe(
+      "Failed to close utun8; 3 routes remain: permission denied",
+    );
+  });
+
   it("翻译 Windows 网卡与 hosts 错误", () => {
     expect(localizeError("创建虚拟网卡失败：拒绝访问，需要管理员权限运行（Win32 5）")).toBe(
       "Failed to create the virtual adapter: access denied; administrator privileges are required (Win32 5)",

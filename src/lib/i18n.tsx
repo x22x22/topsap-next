@@ -68,6 +68,7 @@ const EN: Record<string, string> = {
   "内网流量已进入隧道": "Intranet traffic is routed through the tunnel",
   "填写网关信息后开始连接": "Fill in the gateway information to connect",
   "正在探测网关": "Probing gateway",
+  "正在检查路由冲突": "Checking for route conflicts",
   "等待验证码": "Waiting for captcha",
   "等待动态验证码": "Waiting for one-time code",
   "正在登录": "Signing in",
