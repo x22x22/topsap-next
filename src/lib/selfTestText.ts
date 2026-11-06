@@ -50,6 +50,8 @@ const DETAIL_EN: Array<[RegExp, string]> = [
     "Injected a $1-byte ICMP request into the adapter ($2 → $3)"],
   [/^写入失败，网卡会话不可用$/, "Write failed; the adapter session is unavailable"],
   [/^读循环提前结束$/, "The read loop ended early"],
+  [/^3 秒内未收到系统回包；请检查测试路由是否生效、网卡读路径是否可用$/,
+    "No system reply was received within 3 seconds; check that the test route is active and the adapter read path works"],
   [/^3 秒内未收到系统发往网卡的 ICMP 请求；请检查测试路由是否生效、网卡读路径是否可用$/,
     "No ICMP request from the system to the adapter was received within 3 seconds; check that the test route is active and the adapter read path works"],
   [/^ping (.+) 成功，系统已把包交给网卡$/,

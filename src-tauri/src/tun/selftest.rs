@@ -338,44 +338,60 @@ pub async fn run<F: FnMut(&SelfTestStep)>(dll_path: &Path, on_step: F) -> SelfTe
         b.fail("发送方向（应用 → 网卡）", "写入失败，网卡会话不可用");
     }
 
-    #[cfg(windows)]
-    let ping_args: &[&str] = &["-n", "1", "-w", "1000", "-S", TEST_VIP, TEST_PING_TARGET];
-    #[cfg(target_os = "macos")]
-    let ping_args: &[&str] = &["-c", "1", "-W", "1000", "-S", TEST_VIP, TEST_PING_TARGET];
-    #[cfg(target_os = "linux")]
-    let ping_args: &[&str] = &["-c", "1", "-W", "1", "-S", TEST_VIP, TEST_PING_TARGET];
     #[cfg(target_os = "macos")]
     let ping_program = "/sbin/ping";
     #[cfg(not(target_os = "macos"))]
     let ping_program = "ping";
+    #[cfg(target_os = "macos")]
+    let ping_args: &[&str] = &["-c", "1", "-W", "1000", "-S", TEST_VIP, TEST_PING_TARGET];
+    #[cfg(windows)]
+    let ping_args: &[&str] = &["-n", "1", "-w", "1000", TEST_PING_TARGET];
+    #[cfg(target_os = "linux")]
+    let ping_args: &[&str] = &["-c", "1", "-W", "1", TEST_PING_TARGET];
 
-    let received = async {
-        loop {
-            match rx.recv().await {
-                Some(packet) if is_system_echo_request(&packet, TEST_VIP, TEST_PING_TARGET) => {
-                    return Some(packet);
+    #[cfg(target_os = "macos")]
+    {
+        let received = async {
+            loop {
+                match rx.recv().await {
+                    Some(packet) if is_system_echo_request(&packet, TEST_VIP, TEST_PING_TARGET) => {
+                        return Some(packet);
+                    }
+                    Some(_) => continue,
+                    None => return None,
                 }
-                Some(_) => continue,
-                None => return None,
             }
+        };
+        let (_, received) = tokio::join!(
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                shell::run_local(ping_program, ping_args)
+            ),
+            tokio::time::timeout(Duration::from_secs(3), received)
+        );
+        match received {
+            Ok(Some(packet)) => b.ok(
+                "接收方向（网卡 → 应用）",
+                format!("收到系统发往网卡的 ICMP 请求：{}", describe_packet(&packet)),
+            ),
+            Ok(None) => b.fail("接收方向（网卡 → 应用）", "读循环提前结束"),
+            Err(_) => b.fail(
+                "接收方向（网卡 → 应用）",
+                "3 秒内未收到系统发往网卡的 ICMP 请求；请检查测试路由是否生效、网卡读路径是否可用",
+            ),
         }
-    };
-    let (_, received) = tokio::join!(
-        tokio::time::timeout(
-            Duration::from_secs(5),
-            shell::run_local(ping_program, ping_args)
-        ),
-        tokio::time::timeout(Duration::from_secs(3), received)
-    );
-    match received {
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    match tokio::time::timeout(Duration::from_secs(3), rx.recv()).await {
         Ok(Some(packet)) => b.ok(
             "接收方向（网卡 → 应用）",
-            format!("收到系统发往网卡的 ICMP 请求：{}", describe_packet(&packet)),
+            format!("收到系统回包：{}", describe_packet(&packet)),
         ),
         Ok(None) => b.fail("接收方向（网卡 → 应用）", "读循环提前结束"),
         Err(_) => b.fail(
             "接收方向（网卡 → 应用）",
-            "3 秒内未收到系统发往网卡的 ICMP 请求；请检查测试路由是否生效、网卡读路径是否可用",
+            "3 秒内未收到系统回包；请检查测试路由是否生效、网卡读路径是否可用",
         ),
     }
 
@@ -557,6 +573,7 @@ pub fn describe_packet(packet: &[u8]) -> String {
 }
 
 /// 判断报文是否为系统发往测试目标的 IPv4 ICMP Echo 请求
+#[cfg(any(target_os = "macos", test))]
 fn is_system_echo_request(packet: &[u8], src: &str, dst: &str) -> bool {
     if packet.len() < 28 || packet[0] >> 4 != 4 || packet[9] != 1 || packet[20] != 8 {
         return false;

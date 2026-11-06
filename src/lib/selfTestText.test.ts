@@ -46,6 +46,13 @@ describe("localizeSelfTestDetail", () => {
     ).toBe(
       "No ICMP request from the system to the adapter was received within 3 seconds; check that the test route is active and the adapter read path works",
     );
+    expect(
+      localizeSelfTestDetail(
+        "3 秒内未收到系统回包；请检查测试路由是否生效、网卡读路径是否可用",
+      ),
+    ).toBe(
+      "No system reply was received within 3 seconds; check that the test route is active and the adapter read path works",
+    );
     expect(localizeSelfTestDetail("执行超时（60 秒）")).toBe(
       "Timed out after 60 seconds",
     );
