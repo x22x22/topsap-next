@@ -120,11 +120,15 @@ impl TunDevice {
                 platform.enable_routing(false);
             });
             if let (Some(vip), Some(mask)) = (vip, mask) {
-                if let (Ok(vip), Ok(mask)) = (
+                // macOS 点对点隧道必须有对端地址，官方客户端使用 VIP-1；不能把 VIP 同时当本机地址和对端
+                let peer =
+                    crate::auth::model::virtual_peer(vip, mask).unwrap_or_else(|| vip.to_string());
+                if let (Ok(vip), Ok(peer), Ok(mask)) = (
                     vip.parse::<std::net::IpAddr>(),
+                    peer.parse::<std::net::IpAddr>(),
                     mask.parse::<std::net::IpAddr>(),
                 ) {
-                    config.address(vip).destination(vip).netmask(mask);
+                    config.address(vip).destination(peer).netmask(mask);
                 }
             }
         }

@@ -483,6 +483,34 @@ pub fn is_ipv4(text: &str) -> bool {
             .all(|p| !p.is_empty() && p.len() <= 3 && p.parse::<u8>().is_ok())
 }
 
+/// 推导点对点隧道的对端地址：官方客户端实测为 VIP-1。
+///
+/// 首地址（网络地址 + 1）时回退 VIP+1；/31 取相邻地址，/32 没有可用对端。
+pub fn virtual_peer(vip: &str, mask: &str) -> Option<String> {
+    let value = ipv4_to_u32(vip)?;
+    let prefix = mask_to_prefix(mask)?;
+    if prefix == 0 || prefix == 32 {
+        return None;
+    }
+    if prefix == 31 {
+        return Some(u32_to_ipv4(value ^ 1));
+    }
+    let host_bits = 32 - prefix;
+    let netmask = u32::MAX << host_bits;
+    let network = value & netmask;
+    let broadcast = network | !netmask;
+    if value == network || value == broadcast {
+        return None;
+    }
+    let candidate = value.checked_sub(1)?;
+    if candidate != network && candidate != broadcast {
+        return Some(u32_to_ipv4(candidate));
+    }
+    let candidate = value.checked_add(1)?;
+    (candidate != network && candidate != broadcast && candidate != value)
+        .then(|| u32_to_ipv4(candidate))
+}
+
 /// 点分十进制掩码 -> 前缀长度。非连续掩码返回 None。
 pub fn mask_to_prefix(mask: &str) -> Option<u8> {
     let parts: Vec<u8> = mask
@@ -516,6 +544,39 @@ mod tests {
         assert!(!is_ipv4("192.0.2"));
         assert!(!is_ipv4("192.0.2.256"));
         assert!(!is_ipv4(""));
+    }
+
+    #[test]
+    fn 对端地址_按_vip_减一推导() {
+        assert_eq!(
+            virtual_peer("172.21.8.108", "255.255.248.0").as_deref(),
+            Some("172.21.8.107")
+        );
+        assert_eq!(
+            virtual_peer("172.21.15.82", "255.255.248.0").as_deref(),
+            Some("172.21.15.81")
+        );
+        assert_eq!(
+            virtual_peer("10.99.99.2", "255.255.255.0").as_deref(),
+            Some("10.99.99.1")
+        );
+    }
+
+    #[test]
+    fn 对端地址_边界与非法输入() {
+        assert_eq!(
+            virtual_peer("10.0.0.1", "255.255.255.0").as_deref(),
+            Some("10.0.0.2")
+        );
+        assert_eq!(virtual_peer("10.0.0.0", "255.255.255.0"), None);
+        assert_eq!(virtual_peer("10.0.0.255", "255.255.255.0"), None);
+        assert_eq!(
+            virtual_peer("10.0.0.2", "255.255.255.254").as_deref(),
+            Some("10.0.0.3")
+        );
+        assert_eq!(virtual_peer("10.0.0.2", "255.255.255.255"), None);
+        assert_eq!(virtual_peer("bad", "255.255.255.0"), None);
+        assert_eq!(virtual_peer("10.0.0.2", "255.0.255.0"), None);
     }
 
     #[test]

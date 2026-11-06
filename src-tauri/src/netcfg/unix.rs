@@ -44,6 +44,8 @@ pub struct NetConfig {
     ledger: Vec<LedgerEntry>,
     #[cfg(target_os = "macos")]
     vip: Option<String>,
+    #[cfg(target_os = "macos")]
+    peer: Option<String>,
 }
 
 impl NetConfig {
@@ -53,6 +55,8 @@ impl NetConfig {
             ledger: Vec::new(),
             #[cfg(target_os = "macos")]
             vip: None,
+            #[cfg(target_os = "macos")]
+            peer: None,
         }
     }
 
@@ -80,13 +84,24 @@ impl NetConfig {
 
         #[cfg(target_os = "macos")]
         {
+            let peer = crate::auth::model::virtual_peer(vip, mask);
+            let destination = peer.as_deref().unwrap_or(vip);
             let _ = shell::run(
                 "ifconfig",
-                &[&self.ifname, "inet", vip, vip, "netmask", mask, "up"],
+                &[
+                    &self.ifname,
+                    "inet",
+                    vip,
+                    destination,
+                    "netmask",
+                    mask,
+                    "up",
+                ],
             )
             .await;
             let _ = shell::run("ifconfig", &[&self.ifname, "mtu", "1400"]).await;
             self.vip = Some(vip.to_string());
+            self.peer = peer;
         }
 
         tokio::time::sleep(Duration::from_millis(300)).await;
@@ -185,8 +200,10 @@ impl NetConfig {
             #[cfg(target_os = "linux")]
             let out = shell::run("ip", &["route", "add", &target, "dev", &self.ifname]).await;
             #[cfg(target_os = "macos")]
-            let out = match self.vip.as_deref() {
-                Some(vip) => {
+            let gateway = self.peer.as_deref().or(self.vip.as_deref());
+            #[cfg(target_os = "macos")]
+            let out = match gateway {
+                Some(peer) => {
                     shell::run(
                         "route",
                         &[
@@ -196,7 +213,7 @@ impl NetConfig {
                             &route.dest,
                             "-netmask",
                             &route.mask,
-                            vip,
+                            peer,
                         ],
                     )
                     .await
@@ -411,12 +428,18 @@ impl NetConfig {
                         )
                         .await;
                         if macos_route_exists(&self.ifname, &dest, prefix).await {
-                            if let Some(vip) = self.vip.as_deref() {
+                            for gateway in [self.peer.as_deref(), self.vip.as_deref()]
+                                .into_iter()
+                                .flatten()
+                            {
                                 let _ = shell::run(
                                     "route",
-                                    &["-n", "delete", "-net", &dest, "-netmask", &mask, vip],
+                                    &["-n", "delete", "-net", &dest, "-netmask", &mask, gateway],
                                 )
                                 .await;
+                                if !macos_route_exists(&self.ifname, &dest, prefix).await {
+                                    break;
+                                }
                             }
                         }
                     }

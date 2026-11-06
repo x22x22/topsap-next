@@ -304,6 +304,8 @@ TCP/TLS 连接 gateway:port
 
 虚拟网卡使用 `net_param.vip_v4` / `vip_mask`。MTU 取 1400（官方客户端行为）。
 
+macOS 的 utun 是点对点接口：本机地址为 VIP，对端地址按 **VIP-1** 推导（官方客户端实测 `ifconfig` 显示 `inet VIP --> VIP-1`），资源路由的下一跳同样使用 VIP-1。不能把 VIP 同时当作对端和网关：`route get` 回读会通过，但内核不会把系统流量真正投递到 utun。Windows 使用 Wintun on-link，Linux 使用 `ip route ... dev`，均不需要对端地址。
+
 ### 4.2 路由
 
 原客户端 `na_client.exe` 按 **`acl_list` 的目标网段**逐条注入路由（`AddVPNTunnelRoute` / `AddSingleRoute` / `CheckRouteTable`），不使用 `route_list` 聚合。目标地址优先取非零 `d_ip_v4`，否则取 `d_ip_v6`（本网关把 IPv4 目标写在该字段）。
@@ -311,6 +313,8 @@ TCP/TLS 连接 gateway:port
 当前客户端先按 ACL 目标生成路由，再与 `res_list[].ip` + `mask` 取并集，保证资源列表中的每个地址都能出现在系统路由表；`ip/mask` 缺失时回退 `name` 中的 IPv4/CIDR。`show=no` 的隐藏资源不展示，但仍参与路由。`route_list` 仍不作为路由来源。
 
 原客户端使用 NDIS 虚拟网卡，资源路由的 NextHop 为虚拟网关（实测为 VIP-1）、metric 约 332；本客户端使用 Wintun 点对点 L3 设备，路由为 on-link（`0.0.0.0`）、metric 较低，Windows 还会为 on-link 网段自动生成广播地址 `/32` 路由。两者资源目的地址与掩码一致，差异属于数据面实现差异，不应强行改成原厂 next-hop。
+
+macOS 与 Windows 不同：utun 必须显式指定对端，本客户端与官方客户端一致，`ifconfig` 使用 `inet VIP VIP-1`，资源路由使用 `route -n add -net <dest> -netmask <mask> VIP-1`。
 
 **必须**为网关自身的 IP 加一条旁路路由（走物理默认网关），否则隧道连接会自己走进隧道形成环路。
 

@@ -17,7 +17,7 @@ use crate::tun::TunDevice;
 
 const SOCKET_DIR: &str = "/var/run/topsap-next";
 /// helper 权限/协议版本；新增白名单命令时必须递增，触发已安装 helper 重装
-pub const HELPER_VERSION: &str = "1.2.3";
+pub const HELPER_VERSION: &str = "1.2.4";
 
 #[derive(Debug, Deserialize)]
 struct Request {
