@@ -1,14 +1,19 @@
-//! Windows 网卡 IPv4 地址：IPHLPAPI 直写与回读。
+//! Windows 网卡 IPv4 地址：IPHLPAPI 直写、静态配置持久化与回读。
 
 use std::net::Ipv4Addr;
 
 use super::{ipv4_dword, NO_ERROR};
 
 const ERROR_NOT_FOUND: u32 = 1168;
+const ERROR_BUFFER_OVERFLOW: u32 = 111;
 const AF_INET: u16 = 2;
 const NL_PREFIX_ORIGIN_MANUAL: u32 = 1;
 const NL_SUFFIX_ORIGIN_MANUAL: u32 = 1;
 const INFINITE_LIFETIME: u32 = 0xFFFF_FFFF;
+const GAA_FLAG_SKIP_ANYCAST: u32 = 0x2;
+const GAA_FLAG_SKIP_MULTICAST: u32 = 0x4;
+const GAA_FLAG_SKIP_DNS_SERVER: u32 = 0x8;
+const TCPIP_INTERFACES: &str = r"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces";
 
 /// Windows `SOCKADDR_INET` 的 IPv4 形态；总长 28 字节，与 `SOCKADDR_IN6` 对齐
 #[repr(C)]
@@ -46,6 +51,16 @@ struct MibUnicastIpAddressTable {
     table: [MibUnicastIpAddressRow; 1],
 }
 
+/// `IP_ADAPTER_ADDRESSES` 的前缀；只读取遍历所需的字段
+#[repr(C)]
+#[allow(dead_code)]
+struct IpAdapterAddresses {
+    length: u32,
+    if_index: u32,
+    next: *mut IpAdapterAddresses,
+    adapter_name: *const u8,
+}
+
 #[allow(non_snake_case)]
 #[link(name = "iphlpapi")]
 extern "system" {
@@ -54,6 +69,13 @@ extern "system" {
     fn DeleteUnicastIpAddressEntry(row: *const MibUnicastIpAddressRow) -> u32;
     fn InitializeUnicastIpAddressEntry(row: *mut MibUnicastIpAddressRow);
     fn FreeMibTable(memory: *const std::ffi::c_void);
+    fn GetAdaptersAddresses(
+        family: u32,
+        flags: u32,
+        reserved: *mut std::ffi::c_void,
+        addresses: *mut IpAdapterAddresses,
+        size: *mut u32,
+    ) -> u32;
 }
 
 /// 读取 IPv4 单播地址表；失败返回 Win32 错误码
@@ -132,6 +154,84 @@ pub(super) fn set_unicast_address(index: u32, vip: Ipv4Addr, prefix: u8) -> Resu
     }
 }
 
+/// 按接口索引读取网卡 GUID（`{...}`），用于定位 Tcpip 配置键
+fn adapter_guid_by_index(index: u32) -> Option<String> {
+    let flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
+    let mut size = 0u32;
+    let code = unsafe {
+        GetAdaptersAddresses(
+            AF_INET as u32,
+            flags,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut size,
+        )
+    };
+    if code != ERROR_BUFFER_OVERFLOW && code != NO_ERROR {
+        return None;
+    }
+    if size == 0 {
+        return None;
+    }
+
+    let mut buffer = vec![0u8; size as usize];
+    let code = unsafe {
+        GetAdaptersAddresses(
+            AF_INET as u32,
+            flags,
+            std::ptr::null_mut(),
+            buffer.as_mut_ptr() as *mut IpAdapterAddresses,
+            &mut size,
+        )
+    };
+    if code != NO_ERROR {
+        return None;
+    }
+
+    let mut current = buffer.as_ptr() as *const IpAdapterAddresses;
+    while !current.is_null() {
+        let row = unsafe { &*current };
+        if row.if_index == index {
+            return unsafe { read_c_string(row.adapter_name) };
+        }
+        current = row.next;
+    }
+    None
+}
+
+unsafe fn read_c_string(ptr: *const u8) -> Option<String> {
+    if ptr.is_null() {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    for offset in 0..256 {
+        let byte = unsafe { *ptr.add(offset) };
+        if byte == 0 {
+            return Some(String::from_utf8_lossy(&bytes).into_owned());
+        }
+        bytes.push(byte);
+    }
+    None
+}
+
+/// 把静态 IP 与掩码写入网卡的持久配置；仅用于 IPv4 属性窗口展示
+pub(super) fn persist_static_address(index: u32, vip: Ipv4Addr, mask: &str) -> Result<(), String> {
+    let guid = adapter_guid_by_index(index)
+        .ok_or_else(|| format!("未找到接口索引 {index} 对应的网卡 GUID"))?;
+    let path = format!(r"{TCPIP_INTERFACES}\{guid}");
+    let key = windows_registry::LOCAL_MACHINE
+        .create(&path)
+        .map_err(|err| format!("打开注册表失败：{err}"))?;
+    let vip_text = vip.to_string();
+    key.set_u32("EnableDHCP", 0)
+        .map_err(|err| format!("写入 EnableDHCP 失败：{err}"))?;
+    key.set_multi_string("IPAddress", &[vip_text.as_str()])
+        .map_err(|err| format!("写入 IPAddress 失败：{err}"))?;
+    key.set_multi_string("SubnetMask", &[mask])
+        .map_err(|err| format!("写入 SubnetMask 失败：{err}"))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -173,5 +273,17 @@ mod tests {
             assert_eq!(row.address.family, AF_INET);
             assert!(row.on_link_prefix_length <= 32);
         }
+    }
+
+    #[test]
+    fn 网卡_guid_可读取() {
+        let table = unicast_ipv4_table().expect("GetUnicastIpAddressTable failed");
+        let guid = table
+            .iter()
+            .find_map(|row| adapter_guid_by_index(row.interface_index));
+        assert!(
+            guid.as_deref().is_some_and(|value| value.starts_with('{')),
+            "adapter GUID not resolved"
+        );
     }
 }

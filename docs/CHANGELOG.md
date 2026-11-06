@@ -9,9 +9,15 @@
 - 版本检查支持点击侧栏版本号手动触发：有更新时打开弹窗，无更新提示「已是最新版本」，网络或内容异常提示「检查更新失败」；检查结果区分「无更新」与「检查失败」，避免断网时误报
 - macOS 路由冲突预检与接管：连接前读取 `netstat -rn -f inet`，按目标网段与掩码精确比对；发现其他接口（其他 VPN、旧会话残留或物理网络同网段）已占用时弹窗列出冲突，用户确认「接管并连接」后删除冲突路由并继续；取消或超时则中止连接。全部路由失败时也会把明细写入运行日志
 - macOS 诊断页 utun 残留检测与一键清理：列出带 IPv4 地址的 utun（地址 / 对端 / MTU / 关联路由数），当前连接使用的接口标记为「使用中」且不可清理；二次确认后执行 `ifconfig utunN down` 并删除剩余关联路由；自检进行中拒绝清理
+- 运行日志时间戳补充日期，格式为 `[2026-11-07 00:20:16]`；配址回退 `netsh`、路由回退 `route add` 时写入运行日志，兜底不再静默
+
+### 变更
+
+- `netcfg/windows.rs` 拆分为 `netcfg/windows/{mod,address}.rs`，地址配置 FFI 独立成子模块，行为不变
 
 ### 修复
 
+- Windows IPv4 属性窗口：IPHLPAPI 写入地址后补写网卡静态配置（`EnableDHCP=0`、`IPAddress`、`SubnetMask`），修复「详细信息」有地址但 TCP/IPv4 属性页 IP 与掩码为空的问题，与官方客户端 `netsh ... static` 行为一致
 - Windows 连接性能：Win10/11 网卡地址配置改为 IPHLPAPI `GetUnicastIpAddressTable` / `CreateUnicastIpAddressEntry` 直接写入并回读，避免 `netsh`「返回成功但地址未生效」；仅 API 失败时回退 `netsh`，兜底按 20 秒总时长轮询（第 6 秒仍无地址时重试一次 `delete+add`），修复 v1.3.3 因 6 秒短窗口导致的「设置网卡地址失败（当前：无地址）」随机失败；资源路由改用 IPHLPAPI `CreateIpForwardEntry` / `GetIpForwardTable` / `DeleteIpForwardEntry`，NextHop 为虚拟网关 VIP-1，Metric 保持 1，移除批量 `cmd` / `New-NetRoute` 进程调用；API 失败时回退单条 `route add`；旁路路由一次 `route print` 同时读取活动路由与默认网关。Windows 7 保持原有 `netsh` + `route` 路径
 - 异常退出补偿：会话标记额外记录 macOS utun 名称与 VIP；下次启动/连接前仅当接口地址与记录一致时关闭该 utun 并清理关联路由，避免误伤同名接口
 - 网卡自检：注入测试路由前先检查同前缀路由冲突，发现被其他接口占用时直接给出冲突接口并跳过后续测试；macOS 接收方向改为由系统 `ping` 主动向测试目标发包、读循环读回该 ICMP 请求，直接验证真实路由与读路径；Windows / Linux 保持原有「注入报文并等待系统回包」验证方式

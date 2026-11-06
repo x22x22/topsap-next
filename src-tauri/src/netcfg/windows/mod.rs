@@ -9,7 +9,7 @@ use super::{hosts, routes, shell, NetError, RouteReport};
 
 mod address;
 
-use address::set_unicast_address;
+use address::{persist_static_address, set_unicast_address};
 
 /// 配址兜底总等待时长；新建 Wintun 网卡的地址生效可能晚至 7-10 秒
 const CONFIG_TIMEOUT: Duration = Duration::from_secs(20);
@@ -104,6 +104,9 @@ impl NetConfig {
         if let Ok(vip_addr) = vip.parse::<Ipv4Addr>() {
             match set_unicast_address(index, vip_addr, prefix) {
                 Ok(()) => {
+                    if let Err(err) = persist_static_address(index, vip_addr, mask) {
+                        self.notes.push(format!("网卡静态配置写入失败：{err}"));
+                    }
                     self.apply_mtu().await;
                     return Ok(index);
                 }
