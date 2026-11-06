@@ -363,12 +363,6 @@ impl NetConfig {
         }
 
         let next_hop = self.peer.unwrap_or(Ipv4Addr::UNSPECIFIED);
-        if crate::platform::is_windows7() {
-            return self
-                .add_routes_fallback(list, next_hop, if_index, None)
-                .await;
-        }
-
         let table = match ip_forward_table() {
             Ok(table) => table,
             Err(code) => {
@@ -637,11 +631,7 @@ impl NetConfig {
     /// 撤销全部改动。幂等：可重复调用。
     pub async fn cleanup(&mut self) {
         let entries: Vec<LedgerEntry> = self.ledger.drain(..).rev().collect();
-        let table = if crate::platform::is_windows7() {
-            Err(0)
-        } else {
-            ip_forward_table()
-        };
+        let table = ip_forward_table();
 
         for entry in entries {
             match entry {

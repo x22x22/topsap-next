@@ -178,7 +178,7 @@ cargo test --lib                          # Rust 单元测试
 
 安装包启动时自动请求管理员权限（创建虚拟网卡、修改路由表、设置 DNS 都需要），支持 `/S` 静默安装。
 
-> **Windows 7 用户**：需预先安装 WebView2 Runtime 109 与 Visual C++ 2015-2022 Redistributable。微软已停止 Windows 7 上的 WebView2 更新，更新的运行时版本可能无法安装。程序启动时会检测系统版本（6.1），自动切换到 netsh 兼容路径，不影响 Win10/11 的原有行为。
+> **Windows 7 用户**：需预先安装 WebView2 Runtime 109 与 Visual C++ 2015-2022 Redistributable。微软已停止 Windows 7 上的 WebView2 更新，更新的运行时版本可能无法安装。程序启动时会检测系统版本（6.1），自动切换到 Win7 兼容路径（配址走 netsh，资源路由优先 IPHLPAPI、失败回退 route），不影响 Win10/11 的原有行为。
 
 便携版解压后直接运行 `topsap-client.exe`，需保持 `resources\wintun.dll` 的相对位置不变，同样需要以管理员身份运行。
 
@@ -261,7 +261,7 @@ npm run tauri build
 
 **Windows 7 能用吗？**
 
-可以。程序启动时通过 `RtlGetVersion` 检测系统版本，6.1 自动切换到 netsh 兼容路径，不依赖 PowerShell 3.0+ 的 NetTCPIP 模块；Win10/11 仍走原有路径。使用前需安装 WebView2 Runtime 109 与 Visual C++ 2015-2022 Redistributable，并建议在 Windows 7 SP1 上使用。
+可以。程序启动时通过 `RtlGetVersion` 检测系统版本，6.1 自动切换到 Win7 兼容路径：配址使用 `netsh`，资源路由优先 IPHLPAPI、失败回退 `route`，不依赖 PowerShell 3.0+ 的 NetTCPIP 模块；Win10/11 仍走原有路径。使用前需安装 WebView2 Runtime 109 与 Visual C++ 2015-2022 Redistributable，并建议在 Windows 7 SP1 上使用。
 
 **macOS / Linux 怎么运行？**
 

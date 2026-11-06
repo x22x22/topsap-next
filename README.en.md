@@ -178,7 +178,7 @@ Grab the artifact from the [GitHub Releases](https://github.com/zyx3721/topsap-n
 
 The installer requests administrator rights on launch (creating the virtual adapter, editing the route table and setting DNS all require it) and supports `/S` silent installation.
 
-> **Windows 7 users**: install WebView2 Runtime 109 and the Visual C++ 2015-2022 Redistributable first. Microsoft no longer updates WebView2 on Windows 7, so newer runtimes may fail to install. On startup the app detects the OS version (6.1) and switches to the netsh compatibility path automatically, leaving Windows 10/11 behaviour untouched.
+> **Windows 7 users**: install WebView2 Runtime 109 and the Visual C++ 2015-2022 Redistributable first. Microsoft no longer updates WebView2 on Windows 7, so newer runtimes may fail to install. On startup the app detects the OS version (6.1) and switches to the Windows 7 compatibility path automatically (netsh address configuration, IPHLPAPI routes with route fallback), leaving Windows 10/11 behaviour untouched.
 
 The portable build runs `topsap-client.exe` directly; keep `resources\wintun.dll` at its relative path, and run it as administrator as well.
 
@@ -261,7 +261,7 @@ Currently only `vpn_version=ngvone` / `cipher_type=0` gateways are supported; `s
 
 **Does it run on Windows 7?**
 
-Yes. On startup the app reads the real OS version through `RtlGetVersion`; version 6.1 switches to the netsh compatibility path that avoids the PowerShell 3.0+ NetTCPIP module, while Windows 10/11 keep the original path. Install WebView2 Runtime 109 and the Visual C++ 2015-2022 Redistributable first, and prefer Windows 7 SP1.
+Yes. On startup the app reads the real OS version through `RtlGetVersion`; version 6.1 switches to the Windows 7 compatibility path: netsh address configuration and IPHLPAPI routes with route fallback, avoiding the PowerShell 3.0+ NetTCPIP module, while Windows 10/11 keep the original path. Install WebView2 Runtime 109 and the Visual C++ 2015-2022 Redistributable first, and prefer Windows 7 SP1.
 
 **How do I run it on macOS / Linux?**
 
