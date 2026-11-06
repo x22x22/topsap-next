@@ -1,5 +1,6 @@
 //! Windows 网络配置实现：网卡地址、路由注入；hosts 仅用于旧版残留检测与清理。
 
+use std::net::Ipv4Addr;
 use std::time::Duration;
 
 use crate::auth::RouteEntry;
@@ -11,6 +12,8 @@ enum LedgerEntry {
     Route {
         dest: String,
         mask: String,
+        next_hop: Ipv4Addr,
+        if_index: u32,
         preexisting: bool,
     },
     Bypass {
@@ -21,6 +24,8 @@ enum LedgerEntry {
 pub struct NetConfig {
     alias: String,
     if_index: Option<u32>,
+    vip: Option<Ipv4Addr>,
+    peer: Option<Ipv4Addr>,
     ledger: Vec<LedgerEntry>,
 }
 
@@ -29,6 +34,8 @@ impl NetConfig {
         Self {
             alias: alias.into(),
             if_index: None,
+            vip: None,
+            peer: None,
             ledger: Vec::new(),
         }
     }
@@ -69,6 +76,10 @@ impl NetConfig {
                 "掩码「{mask}」不是合法的连续掩码"
             )));
         }
+
+        self.vip = vip.parse().ok();
+        self.peer =
+            crate::auth::model::virtual_peer(vip, mask).and_then(|value| value.parse().ok());
 
         self.configure_interface_netsh(index, &name_arg, vip, mask, !crate::platform::is_windows7())
             .await
@@ -211,73 +222,146 @@ impl NetConfig {
 
     /// 注入内网路由。
     ///
-    /// 批量执行后再回读，避免每条路由都跑一次 `route print`；
-    /// 第一轮失败的用 PowerShell 补一次，仍失败则计入 failed。
+    /// 使用 IPHLPAPI 直接写入路由表，NextHop 为虚拟网关 VIP-1；查询与回读同样走
+    /// `GetIpForwardTable`，避免逐条 `route.exe` 的进程开销。API 失败时才回退 `route add`。
     pub async fn add_routes(&mut self, list: &[RouteEntry], takeover: bool) -> RouteReport {
-        // Windows 的 on-link 路由由系统自动合并，不存在 macOS 的精确前缀冲突
+        // Windows 不存在 macOS 的精确前缀冲突接管
         let _ = takeover;
-        let Some(index) = self.if_index else {
+        let Some(if_index) = self.if_index else {
             return RouteReport {
                 total: list.len(),
                 ok: 0,
                 failed: vec!["接口尚未初始化".to_string()],
             };
         };
+        if list.is_empty() {
+            return RouteReport {
+                total: 0,
+                ok: 0,
+                failed: Vec::new(),
+            };
+        }
 
-        let mut ok = 0usize;
-        let mut pending: Vec<&RouteEntry> = Vec::new();
-        let active = self.active_routes().await;
+        let next_hop = self.peer.unwrap_or(Ipv4Addr::UNSPECIFIED);
+        if crate::platform::is_windows7() {
+            return self
+                .add_routes_fallback(list, next_hop, if_index, None)
+                .await;
+        }
+
+        let table = match ip_forward_table() {
+            Ok(table) => table,
+            Err(code) => {
+                return self
+                    .add_routes_fallback(list, next_hop, if_index, Some(code))
+                    .await
+            }
+        };
+
+        let mut skipped = std::collections::HashSet::new();
+        let mut added = std::collections::HashSet::new();
+        let mut invalid = Vec::new();
+        let mut add_errors = std::collections::HashMap::new();
 
         for route in list {
-            if active.contains(&(route.dest.clone(), route.mask.clone())) {
-                // 已存在：记录下来但不接管（preexisting 不删）
-                self.ledger.push(LedgerEntry::Route {
-                    dest: route.dest.clone(),
-                    mask: route.mask.clone(),
-                    preexisting: true,
-                });
+            let Some((dest, mask)) = route_ipv4(route) else {
+                invalid.push(format!("{}/{} (地址格式错误)", route.dest, route.prefix));
+                continue;
+            };
+            let key = (dest, mask);
+
+            if table
+                .iter()
+                .any(|row| row_matches(row, dest, mask, next_hop, if_index))
+            {
+                self.note_route(route, next_hop, if_index, true);
+                skipped.insert(key);
+                continue;
+            }
+
+            if table
+                .iter()
+                .any(|row| row_matches_dest_mask(row, dest, mask) && row.if_index != if_index)
+            {
+                // 其他接口已有同网段路由：保持不接管
+                self.note_route(route, next_hop, if_index, true);
+                skipped.insert(key);
+                continue;
+            }
+
+            // 接口自动生成的直连/本机/广播路由不能被改写
+            if let Some(vip) = self.vip {
+                if table.iter().any(|row| {
+                    row_matches_dest_mask(row, dest, mask)
+                        && interface_route_matches(row, vip, mask, if_index)
+                }) {
+                    self.note_route(route, next_hop, if_index, true);
+                    skipped.insert(key);
+                    continue;
+                }
+            }
+
+            // 本接口同网段但下一跳不同：旧版 on-link 路由，先删掉再按 VIP-1 重建
+            if let Some(old) = table
+                .iter()
+                .find(|row| row_matches_dest_mask(row, dest, mask) && row.if_index == if_index)
+            {
+                let _ = delete_forward_entry(old);
+            }
+
+            let row = build_forward_row(dest, mask, next_hop, if_index, WINDOWS_ROUTE_METRIC);
+            let mut code = create_forward_entry(&row);
+            if code != NO_ERROR {
+                if let Some(old) = table
+                    .iter()
+                    .find(|row| row_matches_dest_mask(row, dest, mask) && row.if_index == if_index)
+                {
+                    let _ = delete_forward_entry(old);
+                }
+                code = create_forward_entry(&row);
+            }
+
+            if code == NO_ERROR || self.route_add_fallback(route, next_hop, if_index).await {
+                self.note_route(route, next_hop, if_index, false);
+                added.insert(key);
+            } else {
+                add_errors.insert(
+                    key,
+                    format!(
+                        "{}/{} (CreateIpForwardEntry={code})",
+                        route.dest, route.prefix
+                    ),
+                );
+            }
+        }
+
+        let after = ip_forward_table();
+        let mut ok = 0usize;
+        let mut verified_failed = Vec::new();
+        for route in list {
+            let Some((dest, mask)) = route_ipv4(route) else {
+                continue;
+            };
+            let key = (dest, mask);
+            let installed = match &after {
+                Ok(table) => table
+                    .iter()
+                    .any(|row| row_matches(row, dest, mask, next_hop, if_index)),
+                Err(_) => added.contains(&key),
+            };
+            if installed || skipped.contains(&key) {
                 ok += 1;
             } else {
-                pending.push(route);
+                verified_failed.push(
+                    add_errors
+                        .remove(&key)
+                        .unwrap_or_else(|| format!("{}/{}", route.dest, route.prefix)),
+                );
             }
         }
 
-        if !pending.is_empty() {
-            const BATCH: usize = 50;
-            let if_str = index.to_string();
-            for chunk in pending.chunks(BATCH) {
-                let script = route_add_script(&if_str, chunk);
-                let _ = shell::run("cmd", &["/D", "/C", &script]).await;
-            }
-
-            let mut still = self.record_applied(&pending).await;
-
-            // New-NetRoute 属于 PowerShell 3.0+ 的 NetTCPIP 模块，Windows 7 不可用
-            if !still.is_empty() && !crate::platform::is_windows7() {
-                for chunk in still.chunks(BATCH) {
-                    let script = new_net_route_script(index, chunk);
-                    let _ = shell::powershell(&script).await;
-                }
-                still = self.record_applied(&still).await;
-            }
-
-            ok += pending.len() - still.len();
-        }
-
-        let failed = list
-            .iter()
-            .filter(|route| {
-                !self.ledger.iter().any(|e| {
-                    matches!(
-                        e,
-                        LedgerEntry::Route { dest, mask, .. }
-                            if dest == &route.dest && mask == &route.mask
-                    )
-                })
-            })
-            .map(|route| format!("{}/{}", route.dest, route.prefix))
-            .collect();
-
+        let mut failed = invalid;
+        failed.extend(verified_failed);
         RouteReport {
             total: list.len(),
             ok,
@@ -285,22 +369,88 @@ impl NetConfig {
         }
     }
 
-    /// 回读路由表，把真正生效的记入账本，返回仍失败的路由
-    async fn record_applied<'a>(&mut self, routes: &[&'a RouteEntry]) -> Vec<&'a RouteEntry> {
-        let active = self.active_routes().await;
-        let mut still = Vec::new();
-        for route in routes {
-            if active.contains(&(route.dest.clone(), route.mask.clone())) {
-                self.ledger.push(LedgerEntry::Route {
-                    dest: route.dest.clone(),
-                    mask: route.mask.clone(),
-                    preexisting: false,
-                });
+    fn note_route(
+        &mut self,
+        route: &RouteEntry,
+        next_hop: Ipv4Addr,
+        if_index: u32,
+        preexisting: bool,
+    ) {
+        self.ledger.push(LedgerEntry::Route {
+            dest: route.dest.clone(),
+            mask: route.mask.clone(),
+            next_hop,
+            if_index,
+            preexisting,
+        });
+    }
+
+    /// `GetIpForwardTable` 不可用时的回退：逐条 `route add` + `route print` 回读
+    async fn add_routes_fallback(
+        &mut self,
+        list: &[RouteEntry],
+        next_hop: Ipv4Addr,
+        if_index: u32,
+        code: Option<u32>,
+    ) -> RouteReport {
+        let before = self.active_routes().await;
+        for route in list {
+            if before.contains(&(route.dest.clone(), route.mask.clone())) {
+                self.note_route(route, next_hop, if_index, true);
+                continue;
+            }
+            let _ = self.route_add_fallback(route, next_hop, if_index).await;
+            self.note_route(route, next_hop, if_index, false);
+        }
+
+        let after = self.active_routes().await;
+        let mut ok = 0usize;
+        let mut failed = Vec::new();
+        for route in list {
+            if after.contains(&(route.dest.clone(), route.mask.clone())) {
+                ok += 1;
             } else {
-                still.push(*route);
+                failed.push(match code {
+                    Some(code) => {
+                        format!("{}/{} (IPHLPAPI={code})", route.dest, route.prefix)
+                    }
+                    None => format!("{}/{}", route.dest, route.prefix),
+                });
             }
         }
-        still
+        RouteReport {
+            total: list.len(),
+            ok,
+            failed,
+        }
+    }
+
+    /// 单条路由的命令行回退，仅在 IPHLPAPI 写入失败时调用
+    async fn route_add_fallback(
+        &self,
+        route: &RouteEntry,
+        next_hop: Ipv4Addr,
+        if_index: u32,
+    ) -> bool {
+        let if_str = if_index.to_string();
+        let hop = next_hop.to_string();
+        let metric = WINDOWS_ROUTE_METRIC.to_string();
+        shell::run(
+            "route",
+            &[
+                "ADD",
+                &route.dest,
+                "MASK",
+                &route.mask,
+                &hop,
+                "IF",
+                &if_str,
+                "METRIC",
+                &metric,
+            ],
+        )
+        .await
+        .ok
     }
 
     pub async fn set_dns(&mut self, dns1: &str, dns2: &str) -> bool {
@@ -342,24 +492,46 @@ impl NetConfig {
 
     /// 撤销全部改动。幂等：可重复调用。
     pub async fn cleanup(&mut self) {
-        let if_index = self.if_index.map(|i| i.to_string());
+        let entries: Vec<LedgerEntry> = self.ledger.drain(..).rev().collect();
+        let table = if crate::platform::is_windows7() {
+            Err(0)
+        } else {
+            ip_forward_table()
+        };
 
-        for entry in self.ledger.drain(..).rev() {
+        for entry in entries {
             match entry {
                 LedgerEntry::Route {
                     dest,
                     mask,
+                    next_hop,
+                    if_index,
                     preexisting,
                 } => {
                     if preexisting {
                         continue;
                     }
-                    let mut args = vec!["DELETE", dest.as_str(), "MASK", mask.as_str()];
-                    if let Some(index) = &if_index {
-                        args.push("IF");
-                        args.push(index.as_str());
+                    let handled = match &table {
+                        Ok(rows) => match (dest.parse::<Ipv4Addr>(), mask.parse::<Ipv4Addr>()) {
+                            (Ok(dest_ip), Ok(mask_ip)) => {
+                                match rows.iter().find(|row| {
+                                    row_matches(row, dest_ip, mask_ip, next_hop, if_index)
+                                }) {
+                                    Some(row) => delete_forward_entry(row) == NO_ERROR,
+                                    // 表已成功读取但没有精确条目，说明路由已不存在
+                                    None => true,
+                                }
+                            }
+                            _ => false,
+                        },
+                        Err(_) => false,
+                    };
+                    if !handled {
+                        let if_str = if_index.to_string();
+                        let _ =
+                            shell::run("route", &["DELETE", &dest, "MASK", &mask, "IF", &if_str])
+                                .await;
                     }
-                    let _ = shell::run("route", &args).await;
                 }
                 LedgerEntry::Bypass { ip } => {
                     let _ = shell::run("route", &["DELETE", &ip, "MASK", "255.255.255.255"]).await;
@@ -436,32 +608,164 @@ impl NetConfig {
     }
 }
 
-/// 拼接一批 `route ADD` 命令，交给一次 cmd 进程执行
-fn route_add_script(if_index: &str, routes: &[&RouteEntry]) -> String {
-    routes
-        .iter()
-        .map(|route| {
-            format!(
-                "route ADD {} MASK {} 0.0.0.0 IF {} METRIC 1",
-                route.dest, route.mask, if_index
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(" & ")
+const WINDOWS_ROUTE_METRIC: u32 = 1;
+const NO_ERROR: u32 = 0;
+const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
+const MIB_IPROUTE_TYPE_DIRECT: u32 = 3;
+const MIB_IPROUTE_TYPE_INDIRECT: u32 = 4;
+const MIB_IPPROTO_NETMGMT: u32 = 3;
+
+/// Windows `MIB_IPFORWARDROW`；IP 字段为网络字节序
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
+struct MibIpForwardRow {
+    dest: u32,
+    mask: u32,
+    policy: u32,
+    next_hop: u32,
+    if_index: u32,
+    route_type: u32,
+    proto: u32,
+    age: u32,
+    next_hop_as: u32,
+    metric1: u32,
+    metric2: u32,
+    metric3: u32,
+    metric4: u32,
+    metric5: u32,
 }
 
-/// 拼接一批 `New-NetRoute` 语句，交给一次 PowerShell 执行
-fn new_net_route_script(index: u32, routes: &[&RouteEntry]) -> String {
-    routes
-        .iter()
-        .map(|route| {
-            format!(
-                "New-NetRoute -DestinationPrefix {}/{} -InterfaceIndex {index} -NextHop 0.0.0.0 -RouteMetric 1 -ErrorAction SilentlyContinue",
-                route.dest, route.prefix
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("; ")
+#[repr(C)]
+struct MibIpForwardTable {
+    num_entries: u32,
+    table: [MibIpForwardRow; 1],
+}
+
+#[allow(non_snake_case)]
+#[link(name = "iphlpapi")]
+extern "system" {
+    fn CreateIpForwardEntry(route: *const MibIpForwardRow) -> u32;
+    fn DeleteIpForwardEntry(route: *const MibIpForwardRow) -> u32;
+    fn GetIpForwardTable(table: *mut MibIpForwardTable, size: *mut u32, order: i32) -> u32;
+}
+
+/// 读取 IPv4 路由表；失败返回 Win32 错误码
+fn ip_forward_table() -> Result<Vec<MibIpForwardRow>, u32> {
+    let mut size = 0u32;
+    let mut code = unsafe { GetIpForwardTable(std::ptr::null_mut(), &mut size, 0) };
+    if code != ERROR_INSUFFICIENT_BUFFER && code != NO_ERROR {
+        return Err(code);
+    }
+    if size == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut buffer = vec![0u32; (size as usize).div_ceil(4)];
+    let table = buffer.as_mut_ptr() as *mut MibIpForwardTable;
+    code = unsafe { GetIpForwardTable(table, &mut size, 0) };
+    if code != NO_ERROR {
+        return Err(code);
+    }
+
+    let count = unsafe { (*table).num_entries as usize };
+    let offset = std::mem::offset_of!(MibIpForwardTable, table);
+    let rows = unsafe {
+        std::slice::from_raw_parts(
+            (table as *const u8).add(offset) as *const MibIpForwardRow,
+            count,
+        )
+    };
+    Ok(rows.to_vec())
+}
+
+fn create_forward_entry(row: &MibIpForwardRow) -> u32 {
+    unsafe { CreateIpForwardEntry(row) }
+}
+
+fn delete_forward_entry(row: &MibIpForwardRow) -> u32 {
+    unsafe { DeleteIpForwardEntry(row) }
+}
+
+fn build_forward_row(
+    dest: Ipv4Addr,
+    mask: Ipv4Addr,
+    next_hop: Ipv4Addr,
+    if_index: u32,
+    metric: u32,
+) -> MibIpForwardRow {
+    MibIpForwardRow {
+        dest: ipv4_dword(dest),
+        mask: ipv4_dword(mask),
+        policy: 0,
+        next_hop: ipv4_dword(next_hop),
+        if_index,
+        route_type: if next_hop.is_unspecified() {
+            MIB_IPROUTE_TYPE_DIRECT
+        } else {
+            MIB_IPROUTE_TYPE_INDIRECT
+        },
+        proto: MIB_IPPROTO_NETMGMT,
+        age: 0,
+        next_hop_as: 0,
+        metric1: metric,
+        metric2: 0,
+        metric3: 0,
+        metric4: 0,
+        metric5: 0,
+    }
+}
+
+fn route_ipv4(route: &RouteEntry) -> Option<(Ipv4Addr, Ipv4Addr)> {
+    Some((route.dest.parse().ok()?, route.mask.parse().ok()?))
+}
+
+fn row_matches(
+    row: &MibIpForwardRow,
+    dest: Ipv4Addr,
+    mask: Ipv4Addr,
+    next_hop: Ipv4Addr,
+    if_index: u32,
+) -> bool {
+    row.dest == ipv4_dword(dest)
+        && row.mask == ipv4_dword(mask)
+        && row.next_hop == ipv4_dword(next_hop)
+        && row.if_index == if_index
+}
+
+fn row_matches_dest_mask(row: &MibIpForwardRow, dest: Ipv4Addr, mask: Ipv4Addr) -> bool {
+    row.dest == ipv4_dword(dest) && row.mask == ipv4_dword(mask)
+}
+
+/// 判断是否为接口自动生成的直连/本机/广播路由
+fn interface_route_matches(
+    row: &MibIpForwardRow,
+    vip: Ipv4Addr,
+    mask: Ipv4Addr,
+    if_index: u32,
+) -> bool {
+    if row.if_index != if_index || row.next_hop != ipv4_dword(Ipv4Addr::UNSPECIFIED) {
+        return false;
+    }
+    let vip_value = u32::from(vip);
+    let mask_value = u32::from(mask);
+    let network = Ipv4Addr::from(vip_value & mask_value);
+    let broadcast = Ipv4Addr::from((vip_value & mask_value) | !mask_value);
+    let host_mask = Ipv4Addr::new(255, 255, 255, 255);
+    let dest = dword_ipv4(row.dest);
+    let row_mask = dword_ipv4(row.mask);
+    (dest == network && row_mask == mask)
+        || (dest == vip && row_mask == host_mask)
+        || (dest == broadcast && row_mask == host_mask)
+}
+
+/// Windows IP 辅助 API 使用网络字节序的 DWORD；按内存字节写入
+fn ipv4_dword(ip: Ipv4Addr) -> u32 {
+    u32::from_ne_bytes(ip.octets())
+}
+
+fn dword_ipv4(value: u32) -> Ipv4Addr {
+    Ipv4Addr::from(value.to_ne_bytes())
 }
 
 /// 当前进程是否具备管理员权限
@@ -507,28 +811,71 @@ mod tests {
     }
 
     #[test]
-    fn 批量路由命令_拼接正确() {
-        let routes = [
-            route_entry("198.51.100.0", "255.255.255.0", 24),
-            route_entry("203.0.113.0", "255.255.255.0", 24),
-        ];
-        let refs: Vec<&RouteEntry> = routes.iter().collect();
-        assert_eq!(
-            route_add_script("7", &refs),
-            "route ADD 198.51.100.0 MASK 255.255.255.0 0.0.0.0 IF 7 METRIC 1 & \
-             route ADD 203.0.113.0 MASK 255.255.255.0 0.0.0.0 IF 7 METRIC 1"
-        );
+    fn 路由行_字段与网络字节序正确() {
+        let dest = Ipv4Addr::new(198, 51, 100, 0);
+        let mask = Ipv4Addr::new(255, 255, 255, 0);
+        let hop = Ipv4Addr::new(198, 51, 100, 107);
+        let row = build_forward_row(dest, mask, hop, 17, WINDOWS_ROUTE_METRIC);
+
+        assert_eq!(dword_ipv4(row.dest), dest);
+        assert_eq!(dword_ipv4(row.mask), mask);
+        assert_eq!(dword_ipv4(row.next_hop), hop);
+        assert_eq!(row.if_index, 17);
+        assert_eq!(row.metric1, 1);
+        assert_eq!(row.route_type, MIB_IPROUTE_TYPE_INDIRECT);
+        assert_eq!(row.proto, MIB_IPPROTO_NETMGMT);
+        assert!(row_matches(&row, dest, mask, hop, 17));
+        assert!(!row_matches(&row, dest, mask, hop, 18));
     }
 
     #[test]
-    fn 批量_netroute_命令_拼接正确() {
-        let routes = [route_entry("198.51.100.0", "255.255.255.0", 24)];
-        let refs: Vec<&RouteEntry> = routes.iter().collect();
+    fn 路由行_onlink_使用直连类型() {
+        let dest = Ipv4Addr::new(203, 0, 113, 0);
+        let mask = Ipv4Addr::new(255, 255, 255, 0);
+        let row = build_forward_row(dest, mask, Ipv4Addr::UNSPECIFIED, 17, 1);
+
+        assert_eq!(row.route_type, MIB_IPROUTE_TYPE_DIRECT);
+        assert_eq!(dword_ipv4(row.next_hop), Ipv4Addr::UNSPECIFIED);
+    }
+
+    #[test]
+    fn 接口直连路由_识别() {
+        let vip = Ipv4Addr::new(198, 51, 100, 10);
+        let mask = Ipv4Addr::new(255, 255, 255, 0);
+        let network = Ipv4Addr::new(198, 51, 100, 0);
+        let broadcast = Ipv4Addr::new(198, 51, 100, 255);
+        let host_mask = Ipv4Addr::new(255, 255, 255, 255);
+
+        let net_row = build_forward_row(network, mask, Ipv4Addr::UNSPECIFIED, 17, 1);
+        assert!(interface_route_matches(&net_row, vip, mask, 17));
+
+        let vip_row = build_forward_row(vip, host_mask, Ipv4Addr::UNSPECIFIED, 17, 1);
+        assert!(interface_route_matches(&vip_row, vip, mask, 17));
+
+        let broadcast_row = build_forward_row(broadcast, host_mask, Ipv4Addr::UNSPECIFIED, 17, 1);
+        assert!(interface_route_matches(&broadcast_row, vip, mask, 17));
+
+        let gateway_row = build_forward_row(network, mask, Ipv4Addr::new(198, 51, 100, 1), 17, 1);
+        assert!(!interface_route_matches(&gateway_row, vip, mask, 17));
+    }
+
+    #[test]
+    fn 路由表_可读取() {
+        let table = ip_forward_table();
+        assert!(table.is_ok(), "GetIpForwardTable failed: {:?}", table.err());
+    }
+
+    #[test]
+    fn 路由_解析目标与掩码() {
+        let route = route_entry("198.51.100.0", "255.255.255.0", 24);
         assert_eq!(
-            new_net_route_script(7, &refs),
-            "New-NetRoute -DestinationPrefix 198.51.100.0/24 -InterfaceIndex 7 \
-             -NextHop 0.0.0.0 -RouteMetric 1 -ErrorAction SilentlyContinue"
+            route_ipv4(&route),
+            Some((
+                Ipv4Addr::new(198, 51, 100, 0),
+                Ipv4Addr::new(255, 255, 255, 0)
+            ))
         );
+        assert_eq!(route_ipv4(&route_entry("bad", "255.255.255.0", 24)), None);
     }
 
     #[test]

@@ -312,7 +312,7 @@ macOS 的 utun 是点对点接口：本机地址为 VIP，对端地址按 **VIP-
 
 当前客户端先按 ACL 目标生成路由，再与 `res_list[].ip` + `mask` 取并集，保证资源列表中的每个地址都能出现在系统路由表；`ip/mask` 缺失时回退 `name` 中的 IPv4/CIDR。`show=no` 的隐藏资源不展示，但仍参与路由。`route_list` 仍不作为路由来源。
 
-原客户端使用 NDIS 虚拟网卡，资源路由的 NextHop 为虚拟网关（实测为 VIP-1）、metric 约 332；本客户端使用 Wintun 点对点 L3 设备，路由为 on-link（`0.0.0.0`）、metric 较低，Windows 还会为 on-link 网段自动生成广播地址 `/32` 路由。两者资源目的地址与掩码一致，差异属于数据面实现差异，不应强行改成原厂 next-hop。
+原客户端使用 NDIS 虚拟网卡，资源路由的 NextHop 为虚拟网关（实测为 VIP-1）、metric 约 332。本客户端早期使用 Wintun on-link（`0.0.0.0`）路由；Windows 实现现已改为与官方一致的 `CreateIpForwardEntry`，NextHop 使用 VIP-1、Metric 保持 1，并通过 `GetIpForwardTable` 按 Dest/Mask/NextHop/IfIndex 查重与回读。Wintun 仍是 L3 设备，资源目的地址与掩码不变。
 
 macOS 与 Windows 不同：utun 必须显式指定对端，本客户端与官方客户端一致，`ifconfig` 使用 `inet VIP VIP-1`，资源路由使用 `route -n add -net <dest> -netmask <mask> VIP-1`。
 
