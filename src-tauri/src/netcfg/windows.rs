@@ -7,6 +7,11 @@ use crate::auth::RouteEntry;
 
 use super::{hosts, routes, shell, NetError, RouteReport};
 
+/// 配址兜底总等待时长；新建 Wintun 网卡的地址生效可能晚至 7-10 秒
+const CONFIG_TIMEOUT: Duration = Duration::from_secs(20);
+const CONFIG_RETRY_AFTER: Duration = Duration::from_secs(6);
+const CONFIG_POLL_INTERVAL: Duration = Duration::from_millis(250);
+
 #[derive(Debug, Clone)]
 enum LedgerEntry {
     Route {
@@ -53,8 +58,8 @@ impl NetConfig {
 
     /// 配置网卡 IPv4 地址。
     ///
-    /// 统一使用 `netsh`，避免 PowerShell 启动开销；地址生效通常只需 100-300ms，
-    /// 因此改为短间隔轮询而不是固定等待。最多三轮，每轮换一种写法并回读校验。
+    /// Windows 10/11 直接调用 IPHLPAPI 写入地址，避免 `netsh` 返回成功但地址未生效；
+    /// 失败时回退 `netsh` 并按总时长轮询。Windows 7 保持 `netsh` + 固定等待。
     pub async fn configure_interface(&mut self, vip: &str, mask: &str) -> Result<u32, NetError> {
         let index = self.if_index_with_retry().await.ok_or_else(|| {
             NetError::Interface(format!(
@@ -71,28 +76,41 @@ impl NetConfig {
         )
         .await;
 
-        if routes::mask_to_prefix_len(mask).is_none() {
-            return Err(NetError::Interface(format!(
-                "掩码「{mask}」不是合法的连续掩码"
-            )));
-        }
+        let prefix = routes::mask_to_prefix_len(mask)
+            .ok_or_else(|| NetError::Interface(format!("掩码「{mask}」不是合法的连续掩码")))?;
 
         self.vip = vip.parse().ok();
         self.peer =
             crate::auth::model::virtual_peer(vip, mask).and_then(|value| value.parse().ok());
 
-        self.configure_interface_netsh(index, &name_arg, vip, mask, !crate::platform::is_windows7())
+        if crate::platform::is_windows7() {
+            return self
+                .configure_interface_win7(index, &name_arg, vip, mask)
+                .await;
+        }
+
+        let mut api_error = None;
+        if let Ok(vip_addr) = vip.parse::<Ipv4Addr>() {
+            match set_unicast_address(index, vip_addr, prefix) {
+                Ok(()) => {
+                    self.apply_mtu().await;
+                    return Ok(index);
+                }
+                Err(code) => api_error = Some(code),
+            }
+        }
+
+        self.configure_interface_netsh(index, &name_arg, vip, mask, api_error)
             .await
     }
 
-    /// 统一用 netsh 配址并回读；Windows 10/11 使用 100ms 轮询，Windows 7 保持 600ms 固定等待。
-    async fn configure_interface_netsh(
+    /// Windows 7 兼容路径：系统只有 PowerShell 2.0，没有 NetTCPIP 模块，全部使用 netsh 并固定等待回读。
+    async fn configure_interface_win7(
         &mut self,
         index: u32,
         name_arg: &str,
         vip: &str,
         mask: &str,
-        fast_poll: bool,
     ) -> Result<u32, NetError> {
         let mut attempts = Vec::new();
         let mut actual: Vec<String> = Vec::new();
@@ -141,12 +159,8 @@ impl NetConfig {
                 if out.ok { "ok" } else { "fail" }
             ));
 
-            actual = if fast_poll {
-                self.wait_for_ipv4(vip).await
-            } else {
-                tokio::time::sleep(Duration::from_millis(600)).await;
-                self.interface_ipv4_netsh().await
-            };
+            tokio::time::sleep(Duration::from_millis(600)).await;
+            actual = self.interface_ipv4_netsh().await;
             if actual.iter().any(|a| a == vip) {
                 break;
             }
@@ -166,6 +180,94 @@ impl NetConfig {
 
         self.apply_mtu().await;
         Ok(index)
+    }
+
+    /// IPHLPAPI 失败后的 netsh 兜底：先写入一次，再按总时长轮询，避免短窗口提前失败。
+    async fn configure_interface_netsh(
+        &mut self,
+        index: u32,
+        name_arg: &str,
+        vip: &str,
+        mask: &str,
+        api_error: Option<u32>,
+    ) -> Result<u32, NetError> {
+        let mut attempts = Vec::new();
+        if let Some(code) = api_error {
+            attempts.push(format!("IPHLPAPI={code}"));
+        }
+
+        let out = shell::run(
+            "netsh",
+            &[
+                "interface",
+                "ipv4",
+                "set",
+                "address",
+                name_arg,
+                "static",
+                vip,
+                mask,
+            ],
+        )
+        .await;
+        attempts.push(format!("netsh set={}", if out.ok { "ok" } else { "fail" }));
+
+        let started = std::time::Instant::now();
+        let reset_at = started + CONFIG_RETRY_AFTER;
+        let deadline = started + CONFIG_TIMEOUT;
+        let mut reset_done = false;
+        let mut actual: Vec<String>;
+
+        loop {
+            actual = self.interface_ipv4_netsh().await;
+            if actual.iter().any(|a| a == vip) {
+                self.apply_mtu().await;
+                return Ok(index);
+            }
+
+            let now = std::time::Instant::now();
+            if !reset_done && now >= reset_at {
+                reset_done = true;
+                let addr_arg = format!("addr={vip}");
+                let _ = shell::run(
+                    "netsh",
+                    &[
+                        "interface",
+                        "ipv4",
+                        "delete",
+                        "address",
+                        name_arg,
+                        addr_arg.as_str(),
+                    ],
+                )
+                .await;
+                let out = shell::run(
+                    "netsh",
+                    &["interface", "ipv4", "add", "address", name_arg, vip, mask],
+                )
+                .await;
+                attempts.push(format!(
+                    "netsh delete+add={}",
+                    if out.ok { "ok" } else { "fail" }
+                ));
+            }
+
+            if now >= deadline {
+                break;
+            }
+
+            tokio::time::sleep(CONFIG_POLL_INTERVAL).await;
+        }
+
+        Err(NetError::Interface(format!(
+            "设置网卡地址失败（当前：{}；{}）",
+            if actual.is_empty() {
+                "无地址".to_string()
+            } else {
+                actual.join(",")
+            },
+            attempts.join("，")
+        )))
     }
 
     async fn apply_mtu(&self) {
@@ -557,21 +659,6 @@ impl NetConfig {
         routes::parse_netsh_interfaces(&out.stdout, &self.alias)
     }
 
-    /// 短间隔轮询地址是否生效，避免固定等待 600ms
-    async fn wait_for_ipv4(&self, vip: &str) -> Vec<String> {
-        let mut actual = Vec::new();
-        for attempt in 0..10u32 {
-            actual = self.interface_ipv4_netsh().await;
-            if actual.iter().any(|a| a == vip) {
-                return actual;
-            }
-            if attempt < 9 {
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        }
-        actual
-    }
-
     async fn interface_ipv4_netsh(&self) -> Vec<String> {
         let name_arg = format!("name={}", self.alias);
         let out = shell::run(
@@ -611,9 +698,14 @@ impl NetConfig {
 const WINDOWS_ROUTE_METRIC: u32 = 1;
 const NO_ERROR: u32 = 0;
 const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
+const ERROR_NOT_FOUND: u32 = 1168;
 const MIB_IPROUTE_TYPE_DIRECT: u32 = 3;
 const MIB_IPROUTE_TYPE_INDIRECT: u32 = 4;
 const MIB_IPPROTO_NETMGMT: u32 = 3;
+const AF_INET: u16 = 2;
+const NL_PREFIX_ORIGIN_MANUAL: u32 = 1;
+const NL_SUFFIX_ORIGIN_MANUAL: u32 = 1;
+const INFINITE_LIFETIME: u32 = 0xFFFF_FFFF;
 
 /// Windows `MIB_IPFORWARDROW`；IP 字段为网络字节序
 #[repr(C)]
@@ -642,12 +734,53 @@ struct MibIpForwardTable {
     table: [MibIpForwardRow; 1],
 }
 
+/// Windows `SOCKADDR_INET` 的 IPv4 形态；总长 28 字节，与 `SOCKADDR_IN6` 对齐
+#[repr(C)]
+#[derive(Clone, Copy)]
+#[allow(dead_code)]
+struct SockaddrInet {
+    family: u16,
+    port: u16,
+    addr: u32,
+    reserved: [u8; 20],
+}
+
+/// Windows `MIB_UNICASTIPADDRESS_ROW`
+#[repr(C)]
+#[derive(Clone, Copy)]
+#[allow(dead_code)]
+struct MibUnicastIpAddressRow {
+    address: SockaddrInet,
+    interface_luid: u64,
+    interface_index: u32,
+    prefix_origin: u32,
+    suffix_origin: u32,
+    valid_lifetime: u32,
+    preferred_lifetime: u32,
+    on_link_prefix_length: u8,
+    skip_as_source: u8,
+    dad_state: u32,
+    scope_id: u32,
+    creation_time_stamp: u32,
+}
+
+#[repr(C)]
+struct MibUnicastIpAddressTable {
+    num_entries: u32,
+    table: [MibUnicastIpAddressRow; 1],
+}
+
 #[allow(non_snake_case)]
 #[link(name = "iphlpapi")]
 extern "system" {
     fn CreateIpForwardEntry(route: *const MibIpForwardRow) -> u32;
     fn DeleteIpForwardEntry(route: *const MibIpForwardRow) -> u32;
     fn GetIpForwardTable(table: *mut MibIpForwardTable, size: *mut u32, order: i32) -> u32;
+    fn GetUnicastIpAddressTable(family: u16, table: *mut *mut MibUnicastIpAddressTable) -> u32;
+    fn CreateUnicastIpAddressEntry(row: *const MibUnicastIpAddressRow) -> u32;
+    fn DeleteUnicastIpAddressEntry(row: *const MibUnicastIpAddressRow) -> u32;
+    fn InitializeUnicastIpAddressEntry(row: *mut MibUnicastIpAddressRow);
+    fn FreeMibTable(memory: *const std::ffi::c_void);
 }
 
 /// 读取 IPv4 路由表；失败返回 Win32 错误码
@@ -768,6 +901,82 @@ fn dword_ipv4(value: u32) -> Ipv4Addr {
     Ipv4Addr::from(value.to_ne_bytes())
 }
 
+/// 读取 IPv4 单播地址表；失败返回 Win32 错误码
+fn unicast_ipv4_table() -> Result<Vec<MibUnicastIpAddressRow>, u32> {
+    let mut table: *mut MibUnicastIpAddressTable = std::ptr::null_mut();
+    let code = unsafe { GetUnicastIpAddressTable(AF_INET, &mut table) };
+    if code != NO_ERROR {
+        return Err(code);
+    }
+    if table.is_null() {
+        return Ok(Vec::new());
+    }
+
+    let count = unsafe { (*table).num_entries as usize };
+    let offset = std::mem::offset_of!(MibUnicastIpAddressTable, table);
+    let rows = unsafe {
+        std::slice::from_raw_parts(
+            (table as *const u8).add(offset) as *const MibUnicastIpAddressRow,
+            count,
+        )
+    };
+    let out = rows.to_vec();
+    unsafe { FreeMibTable(table as *const std::ffi::c_void) };
+    Ok(out)
+}
+
+/// 构造手动配置的 IPv4 地址行
+fn build_unicast_row(index: u32, vip: Ipv4Addr, prefix: u8) -> MibUnicastIpAddressRow {
+    let mut row: MibUnicastIpAddressRow = unsafe { std::mem::zeroed() };
+    unsafe { InitializeUnicastIpAddressEntry(&mut row) };
+    row.address.family = AF_INET;
+    row.address.addr = ipv4_dword(vip);
+    row.interface_index = index;
+    row.prefix_origin = NL_PREFIX_ORIGIN_MANUAL;
+    row.suffix_origin = NL_SUFFIX_ORIGIN_MANUAL;
+    row.valid_lifetime = INFINITE_LIFETIME;
+    row.preferred_lifetime = INFINITE_LIFETIME;
+    row.on_link_prefix_length = prefix;
+    row
+}
+
+fn unicast_row_ipv4(row: &MibUnicastIpAddressRow) -> Ipv4Addr {
+    Ipv4Addr::from(row.address.addr.to_ne_bytes())
+}
+
+/// 通过 IPHLPAPI 写入 IPv4 地址；失败返回 Win32 错误码
+fn set_unicast_address(index: u32, vip: Ipv4Addr, prefix: u8) -> Result<(), u32> {
+    let table = unicast_ipv4_table()?;
+    if table
+        .iter()
+        .any(|row| row.interface_index == index && unicast_row_ipv4(row) == vip)
+    {
+        return Ok(());
+    }
+
+    for row in &table {
+        if row.interface_index == index && row.address.family == AF_INET {
+            let _ = unsafe { DeleteUnicastIpAddressEntry(row) };
+        }
+    }
+
+    let row = build_unicast_row(index, vip, prefix);
+    let code = unsafe { CreateUnicastIpAddressEntry(&row) };
+    if code != NO_ERROR {
+        return Err(code);
+    }
+
+    let after = unicast_ipv4_table()?;
+    if after
+        .iter()
+        .any(|row| row.interface_index == index && unicast_row_ipv4(row) == vip)
+    {
+        Ok(())
+    } else {
+        Err(ERROR_NOT_FOUND)
+    }
+}
+
 /// 当前进程是否具备管理员权限
 pub async fn is_elevated() -> bool {
     shell::run("net", &["session"]).await.ok
@@ -863,6 +1072,45 @@ mod tests {
     fn 路由表_可读取() {
         let table = ip_forward_table();
         assert!(table.is_ok(), "GetIpForwardTable failed: {:?}", table.err());
+    }
+
+    #[test]
+    fn 单播地址行_内存布局正确() {
+        assert_eq!(std::mem::size_of::<MibUnicastIpAddressRow>(), 80);
+        assert_eq!(
+            std::mem::offset_of!(MibUnicastIpAddressRow, interface_index),
+            40
+        );
+        assert_eq!(
+            std::mem::offset_of!(MibUnicastIpAddressRow, on_link_prefix_length),
+            60
+        );
+        assert_eq!(std::mem::offset_of!(MibUnicastIpAddressRow, dad_state), 64);
+        assert_eq!(std::mem::offset_of!(MibUnicastIpAddressTable, table), 8);
+    }
+
+    #[test]
+    fn 单播地址行_字段与网络字节序正确() {
+        let vip = Ipv4Addr::new(198, 51, 100, 10);
+        let row = build_unicast_row(17, vip, 24);
+
+        assert_eq!(row.address.family, AF_INET);
+        assert_eq!(unicast_row_ipv4(&row), vip);
+        assert_eq!(row.interface_index, 17);
+        assert_eq!(row.on_link_prefix_length, 24);
+        assert_eq!(row.prefix_origin, NL_PREFIX_ORIGIN_MANUAL);
+        assert_eq!(row.suffix_origin, NL_SUFFIX_ORIGIN_MANUAL);
+        assert_eq!(row.valid_lifetime, INFINITE_LIFETIME);
+        assert_eq!(row.preferred_lifetime, INFINITE_LIFETIME);
+    }
+
+    #[test]
+    fn 单播地址表_可读取() {
+        let table = unicast_ipv4_table().expect("GetUnicastIpAddressTable failed");
+        for row in &table {
+            assert_eq!(row.address.family, AF_INET);
+            assert!(row.on_link_prefix_length <= 32);
+        }
     }
 
     #[test]
