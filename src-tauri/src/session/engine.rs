@@ -185,7 +185,7 @@ impl Engine {
     fn log(&self, message: impl Into<String>) {
         let line = format!(
             "[{}] {}",
-            chrono::Local::now().format("%H:%M:%S"),
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
             message.into()
         );
         self.emit(EngineEvent::Log { line: line.clone() });
@@ -1024,9 +1024,15 @@ impl Engine {
             .configure_interface(&session.vip, &session.vip_mask)
             .await
         {
+            for note in net.take_notes() {
+                self.log(note);
+            }
             self.log(format!("配置网卡失败：{err}"));
             net.cleanup().await;
             return Err(err.to_string());
+        }
+        for note in net.take_notes() {
+            self.log(note);
         }
         if let Some(gateway_ip) = &session.gateway_ip {
             if !net.bypass_gateway(gateway_ip).await {
@@ -1057,6 +1063,9 @@ impl Engine {
                 report.failed.len(),
                 report.failed.join("、")
             ));
+        }
+        for note in net.take_notes() {
+            self.log(note);
         }
         if !session.routes.is_empty() && report.ok == 0 {
             net.cleanup().await;

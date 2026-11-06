@@ -7,6 +7,10 @@ use crate::auth::RouteEntry;
 
 use super::{hosts, routes, shell, NetError, RouteReport};
 
+mod address;
+
+use address::set_unicast_address;
+
 /// 配址兜底总等待时长；新建 Wintun 网卡的地址生效可能晚至 7-10 秒
 const CONFIG_TIMEOUT: Duration = Duration::from_secs(20);
 const CONFIG_RETRY_AFTER: Duration = Duration::from_secs(6);
@@ -32,6 +36,7 @@ pub struct NetConfig {
     vip: Option<Ipv4Addr>,
     peer: Option<Ipv4Addr>,
     ledger: Vec<LedgerEntry>,
+    notes: Vec<String>,
 }
 
 impl NetConfig {
@@ -42,7 +47,13 @@ impl NetConfig {
             vip: None,
             peer: None,
             ledger: Vec::new(),
+            notes: Vec::new(),
         }
+    }
+
+    /// 取出本次配置过程中产生的兜底说明，供连接日志逐条记录
+    pub fn take_notes(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.notes)
     }
 
     pub fn if_index(&self) -> Option<u32> {
@@ -96,7 +107,11 @@ impl NetConfig {
                     self.apply_mtu().await;
                     return Ok(index);
                 }
-                Err(code) => api_error = Some(code),
+                Err(code) => {
+                    self.notes
+                        .push(format!("网卡配址：IPHLPAPI 未生效（{code}），回退 netsh"));
+                    api_error = Some(code);
+                }
             }
         }
 
@@ -354,9 +369,12 @@ impl NetConfig {
         let table = match ip_forward_table() {
             Ok(table) => table,
             Err(code) => {
+                self.notes.push(format!(
+                    "路由注入：GetIpForwardTable 失败（{code}），回退 route add"
+                ));
                 return self
                     .add_routes_fallback(list, next_hop, if_index, Some(code))
-                    .await
+                    .await;
             }
         };
 
@@ -364,6 +382,7 @@ impl NetConfig {
         let mut added = std::collections::HashSet::new();
         let mut invalid = Vec::new();
         let mut add_errors = std::collections::HashMap::new();
+        let mut fallback_ok = 0usize;
 
         for route in list {
             let Some((dest, mask)) = route_ipv4(route) else {
@@ -423,7 +442,15 @@ impl NetConfig {
                 code = create_forward_entry(&row);
             }
 
-            if code == NO_ERROR || self.route_add_fallback(route, next_hop, if_index).await {
+            let installed = if code == NO_ERROR {
+                true
+            } else if self.route_add_fallback(route, next_hop, if_index).await {
+                fallback_ok += 1;
+                true
+            } else {
+                false
+            };
+            if installed {
                 self.note_route(route, next_hop, if_index, false);
                 added.insert(key);
             } else {
@@ -435,6 +462,11 @@ impl NetConfig {
                     ),
                 );
             }
+        }
+
+        if fallback_ok > 0 {
+            self.notes
+                .push(format!("路由注入：{fallback_ok} 条通过 route add 兜底"));
         }
 
         let after = ip_forward_table();
@@ -496,13 +528,20 @@ impl NetConfig {
         code: Option<u32>,
     ) -> RouteReport {
         let before = self.active_routes().await;
+        let mut fallback_ok = 0usize;
         for route in list {
             if before.contains(&(route.dest.clone(), route.mask.clone())) {
                 self.note_route(route, next_hop, if_index, true);
                 continue;
             }
-            let _ = self.route_add_fallback(route, next_hop, if_index).await;
+            if self.route_add_fallback(route, next_hop, if_index).await {
+                fallback_ok += 1;
+            }
             self.note_route(route, next_hop, if_index, false);
+        }
+        if code.is_some() && fallback_ok > 0 {
+            self.notes
+                .push(format!("路由注入：{fallback_ok} 条通过 route add 兜底"));
         }
 
         let after = self.active_routes().await;
@@ -698,14 +737,9 @@ impl NetConfig {
 const WINDOWS_ROUTE_METRIC: u32 = 1;
 const NO_ERROR: u32 = 0;
 const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
-const ERROR_NOT_FOUND: u32 = 1168;
 const MIB_IPROUTE_TYPE_DIRECT: u32 = 3;
 const MIB_IPROUTE_TYPE_INDIRECT: u32 = 4;
 const MIB_IPPROTO_NETMGMT: u32 = 3;
-const AF_INET: u16 = 2;
-const NL_PREFIX_ORIGIN_MANUAL: u32 = 1;
-const NL_SUFFIX_ORIGIN_MANUAL: u32 = 1;
-const INFINITE_LIFETIME: u32 = 0xFFFF_FFFF;
 
 /// Windows `MIB_IPFORWARDROW`；IP 字段为网络字节序
 #[repr(C)]
@@ -734,53 +768,12 @@ struct MibIpForwardTable {
     table: [MibIpForwardRow; 1],
 }
 
-/// Windows `SOCKADDR_INET` 的 IPv4 形态；总长 28 字节，与 `SOCKADDR_IN6` 对齐
-#[repr(C)]
-#[derive(Clone, Copy)]
-#[allow(dead_code)]
-struct SockaddrInet {
-    family: u16,
-    port: u16,
-    addr: u32,
-    reserved: [u8; 20],
-}
-
-/// Windows `MIB_UNICASTIPADDRESS_ROW`
-#[repr(C)]
-#[derive(Clone, Copy)]
-#[allow(dead_code)]
-struct MibUnicastIpAddressRow {
-    address: SockaddrInet,
-    interface_luid: u64,
-    interface_index: u32,
-    prefix_origin: u32,
-    suffix_origin: u32,
-    valid_lifetime: u32,
-    preferred_lifetime: u32,
-    on_link_prefix_length: u8,
-    skip_as_source: u8,
-    dad_state: u32,
-    scope_id: u32,
-    creation_time_stamp: u32,
-}
-
-#[repr(C)]
-struct MibUnicastIpAddressTable {
-    num_entries: u32,
-    table: [MibUnicastIpAddressRow; 1],
-}
-
 #[allow(non_snake_case)]
 #[link(name = "iphlpapi")]
 extern "system" {
     fn CreateIpForwardEntry(route: *const MibIpForwardRow) -> u32;
     fn DeleteIpForwardEntry(route: *const MibIpForwardRow) -> u32;
     fn GetIpForwardTable(table: *mut MibIpForwardTable, size: *mut u32, order: i32) -> u32;
-    fn GetUnicastIpAddressTable(family: u16, table: *mut *mut MibUnicastIpAddressTable) -> u32;
-    fn CreateUnicastIpAddressEntry(row: *const MibUnicastIpAddressRow) -> u32;
-    fn DeleteUnicastIpAddressEntry(row: *const MibUnicastIpAddressRow) -> u32;
-    fn InitializeUnicastIpAddressEntry(row: *mut MibUnicastIpAddressRow);
-    fn FreeMibTable(memory: *const std::ffi::c_void);
 }
 
 /// 读取 IPv4 路由表；失败返回 Win32 错误码
@@ -901,82 +894,6 @@ fn dword_ipv4(value: u32) -> Ipv4Addr {
     Ipv4Addr::from(value.to_ne_bytes())
 }
 
-/// 读取 IPv4 单播地址表；失败返回 Win32 错误码
-fn unicast_ipv4_table() -> Result<Vec<MibUnicastIpAddressRow>, u32> {
-    let mut table: *mut MibUnicastIpAddressTable = std::ptr::null_mut();
-    let code = unsafe { GetUnicastIpAddressTable(AF_INET, &mut table) };
-    if code != NO_ERROR {
-        return Err(code);
-    }
-    if table.is_null() {
-        return Ok(Vec::new());
-    }
-
-    let count = unsafe { (*table).num_entries as usize };
-    let offset = std::mem::offset_of!(MibUnicastIpAddressTable, table);
-    let rows = unsafe {
-        std::slice::from_raw_parts(
-            (table as *const u8).add(offset) as *const MibUnicastIpAddressRow,
-            count,
-        )
-    };
-    let out = rows.to_vec();
-    unsafe { FreeMibTable(table as *const std::ffi::c_void) };
-    Ok(out)
-}
-
-/// 构造手动配置的 IPv4 地址行
-fn build_unicast_row(index: u32, vip: Ipv4Addr, prefix: u8) -> MibUnicastIpAddressRow {
-    let mut row: MibUnicastIpAddressRow = unsafe { std::mem::zeroed() };
-    unsafe { InitializeUnicastIpAddressEntry(&mut row) };
-    row.address.family = AF_INET;
-    row.address.addr = ipv4_dword(vip);
-    row.interface_index = index;
-    row.prefix_origin = NL_PREFIX_ORIGIN_MANUAL;
-    row.suffix_origin = NL_SUFFIX_ORIGIN_MANUAL;
-    row.valid_lifetime = INFINITE_LIFETIME;
-    row.preferred_lifetime = INFINITE_LIFETIME;
-    row.on_link_prefix_length = prefix;
-    row
-}
-
-fn unicast_row_ipv4(row: &MibUnicastIpAddressRow) -> Ipv4Addr {
-    Ipv4Addr::from(row.address.addr.to_ne_bytes())
-}
-
-/// 通过 IPHLPAPI 写入 IPv4 地址；失败返回 Win32 错误码
-fn set_unicast_address(index: u32, vip: Ipv4Addr, prefix: u8) -> Result<(), u32> {
-    let table = unicast_ipv4_table()?;
-    if table
-        .iter()
-        .any(|row| row.interface_index == index && unicast_row_ipv4(row) == vip)
-    {
-        return Ok(());
-    }
-
-    for row in &table {
-        if row.interface_index == index && row.address.family == AF_INET {
-            let _ = unsafe { DeleteUnicastIpAddressEntry(row) };
-        }
-    }
-
-    let row = build_unicast_row(index, vip, prefix);
-    let code = unsafe { CreateUnicastIpAddressEntry(&row) };
-    if code != NO_ERROR {
-        return Err(code);
-    }
-
-    let after = unicast_ipv4_table()?;
-    if after
-        .iter()
-        .any(|row| row.interface_index == index && unicast_row_ipv4(row) == vip)
-    {
-        Ok(())
-    } else {
-        Err(ERROR_NOT_FOUND)
-    }
-}
-
 /// 当前进程是否具备管理员权限
 pub async fn is_elevated() -> bool {
     shell::run("net", &["session"]).await.ok
@@ -1072,45 +989,6 @@ mod tests {
     fn 路由表_可读取() {
         let table = ip_forward_table();
         assert!(table.is_ok(), "GetIpForwardTable failed: {:?}", table.err());
-    }
-
-    #[test]
-    fn 单播地址行_内存布局正确() {
-        assert_eq!(std::mem::size_of::<MibUnicastIpAddressRow>(), 80);
-        assert_eq!(
-            std::mem::offset_of!(MibUnicastIpAddressRow, interface_index),
-            40
-        );
-        assert_eq!(
-            std::mem::offset_of!(MibUnicastIpAddressRow, on_link_prefix_length),
-            60
-        );
-        assert_eq!(std::mem::offset_of!(MibUnicastIpAddressRow, dad_state), 64);
-        assert_eq!(std::mem::offset_of!(MibUnicastIpAddressTable, table), 8);
-    }
-
-    #[test]
-    fn 单播地址行_字段与网络字节序正确() {
-        let vip = Ipv4Addr::new(198, 51, 100, 10);
-        let row = build_unicast_row(17, vip, 24);
-
-        assert_eq!(row.address.family, AF_INET);
-        assert_eq!(unicast_row_ipv4(&row), vip);
-        assert_eq!(row.interface_index, 17);
-        assert_eq!(row.on_link_prefix_length, 24);
-        assert_eq!(row.prefix_origin, NL_PREFIX_ORIGIN_MANUAL);
-        assert_eq!(row.suffix_origin, NL_SUFFIX_ORIGIN_MANUAL);
-        assert_eq!(row.valid_lifetime, INFINITE_LIFETIME);
-        assert_eq!(row.preferred_lifetime, INFINITE_LIFETIME);
-    }
-
-    #[test]
-    fn 单播地址表_可读取() {
-        let table = unicast_ipv4_table().expect("GetUnicastIpAddressTable failed");
-        for row in &table {
-            assert_eq!(row.address.family, AF_INET);
-            assert!(row.on_link_prefix_length <= 32);
-        }
     }
 
     #[test]
