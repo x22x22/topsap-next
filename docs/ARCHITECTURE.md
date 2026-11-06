@@ -328,7 +328,7 @@ TLS 建连（不校验证书、不发 SNI）
 | `secret_store` | 跨平台 keyring（Windows 凭据管理器 / macOS 钥匙串 / Linux Secret Service）+ AES-GCM 回退 | `SecretStore` |
 | `helper` | macOS root LaunchDaemon：创建 utun、执行 ifconfig/route 白名单命令 | `helper::run()` |
 | `privileged` | macOS helper 客户端、LaunchDaemon 安装与版本探活 | `ensure_helper()`, `create_tun()`, `run()` |
-| `session_guard` | 异常退出会话标记、启动/连接前补注销 | `PendingSession`, `purge()` |
+| `session_guard` | 异常退出会话标记、启动/连接前补注销；macOS 记录 utun/VIP 并定向清理残留网卡 | `PendingSession`, `purge()`, `pending_utun()` |
 | `shutdown` | Windows `WM_ENDSESSION`、Unix 终止信号下的限时断开 | `quick_disconnect_blocking` |
 
 ### 7.2 错误约定
@@ -530,7 +530,7 @@ export const api = {
 | 项 | 措施 |
 | --- | --- |
 | 密码落盘 | keyring（Windows 凭据管理器 / macOS 钥匙串 / Linux Secret Service）；失败回退 AES-256-GCM + 机器标识派生密钥 |
-| 会话标记 | 仅保存网关、端口与 `session_id`；AES-256-GCM + 机器绑定密钥，Unix 权限 0600，超过 24 小时不再重试 |
+| 会话标记 | 保存网关、端口、`session_id` 与（macOS）utun 名称/VIP；AES-256-GCM + 机器绑定密钥，Unix 权限 0600，超过 24 小时不再重试；清理 utun 前校验接口地址与记录一致 |
 | 存储位置 | Windows 便携布局：`<exe>/config`、`<exe>/data/logs`、`<exe>/webview`；macOS/Linux 使用系统标准目录 |
 | 日志脱敏 | 密码、验证码、session_id、SPA key 一律不进日志 |
 | CSP | 生产禁用 `unsafe-eval`，仅允许自身资源与 `data:` 图片 |

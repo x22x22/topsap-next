@@ -24,6 +24,12 @@ struct PendingSession {
     session_id: String,
     #[serde(default)]
     user: String,
+    /// macOS 本次创建的 utun 名称；用于异常退出后清理自己残留的网卡
+    #[serde(default)]
+    utun: Option<String>,
+    /// 与 utun 对应的虚拟 IP；清理前校验地址一致，避免误伤同名接口
+    #[serde(default)]
+    vip: Option<String>,
     created_at: u64,
 }
 
@@ -68,9 +74,36 @@ pub fn save(
         port,
         session_id: session_id.to_string(),
         user: user.to_string(),
+        utun: None,
+        vip: None,
         created_at: now_secs(),
     };
-    let payload = serde_json::to_vec(&pending).map_err(|e| format!("序列化会话标记失败：{e}"))?;
+    write_pending(app, &pending)
+}
+
+/// 记录本次创建的 utun 与 VIP，供异常退出后的下次启动定向清理
+pub fn record_tun(app: &AppHandle, utun: &str, vip: &str) -> Result<(), String> {
+    let Some(mut pending) = load(app) else {
+        return Ok(());
+    };
+    pending.utun = Some(utun.to_string());
+    pending.vip = Some(vip.to_string());
+    write_pending(app, &pending)
+}
+
+/// 读取上次会话记录的本机 utun 名称与 VIP；没有记录时返回 None
+pub fn pending_utun(app: &AppHandle) -> Option<(String, String)> {
+    let pending = load(app)?;
+    let utun = pending.utun?;
+    let vip = pending.vip?;
+    if utun.trim().is_empty() || vip.trim().is_empty() {
+        return None;
+    }
+    Some((utun, vip))
+}
+
+fn write_pending(app: &AppHandle, pending: &PendingSession) -> Result<(), String> {
+    let payload = serde_json::to_vec(pending).map_err(|e| format!("序列化会话标记失败：{e}"))?;
     let sealed = secret_store::seal_bytes(&payload)?;
     let path = file_path(app)?;
     if let Some(parent) = path.parent() {
@@ -142,12 +175,24 @@ mod tests {
             port: 443,
             session_id: "session-1".to_string(),
             user: "demo".to_string(),
+            utun: Some("utun8".to_string()),
+            vip: Some("172.21.8.108".to_string()),
             created_at: 1,
         };
         let text = serde_json::to_string(&pending).unwrap();
         let decoded: PendingSession = serde_json::from_str(&text).unwrap();
         assert_eq!(decoded.gateway, pending.gateway);
         assert_eq!(decoded.session_id, pending.session_id);
+        assert_eq!(decoded.utun.as_deref(), Some("utun8"));
+        assert_eq!(decoded.vip.as_deref(), Some("172.21.8.108"));
+    }
+
+    #[test]
+    fn 旧版会话标记缺少网卡字段时兼容() {
+        let text = r#"{"gateway":"vpn.example.com","port":443,"session_id":"s","user":"u","created_at":1}"#;
+        let decoded: PendingSession = serde_json::from_str(text).unwrap();
+        assert!(decoded.utun.is_none());
+        assert!(decoded.vip.is_none());
     }
 
     #[test]

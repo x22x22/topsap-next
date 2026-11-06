@@ -252,10 +252,39 @@ impl Engine {
 
     /// 启动或连接前补注销上次异常退出留下的会话
     pub async fn purge_previous_session(&self) {
+        self.cleanup_pending_tun().await;
         match session_guard::purge(&self.app).await {
             Ok(true) => self.log("检测到上次会话未正常注销，已补注销"),
             Ok(false) => {}
             Err(err) => self.log(format!("上次会话补注销失败：{err}")),
+        }
+    }
+
+    /// 清理上次异常退出留下的、属于本客户端的 utun；地址不一致时不触碰
+    async fn cleanup_pending_tun(&self) {
+        let Some((name, vip)) = session_guard::pending_utun(&self.app) else {
+            return;
+        };
+        if !crate::netcfg::is_utun_name(&name) {
+            return;
+        }
+        let Some(found) = crate::netcfg::utun_interfaces()
+            .await
+            .into_iter()
+            .find(|item| item.name == name)
+        else {
+            return;
+        };
+        if found.address != vip {
+            self.log(format!(
+                "上次会话网卡 {name} 当前地址为 {}，与记录的 {vip} 不一致，跳过清理",
+                found.address
+            ));
+            return;
+        }
+        match crate::netcfg::cleanup_utun(&name).await {
+            Ok(result) => self.log(format!("清理上次会话残留网卡：{}", result.message)),
+            Err(err) => self.log(format!("清理上次会话残留网卡失败：{err}")),
         }
     }
 
@@ -983,6 +1012,9 @@ impl Engine {
         .map_err(|e| format!("网卡任务异常：{e}"))?
         .map_err(|e| e.to_string())?;
         let interface_name = device.interface_name().to_string();
+        if let Err(err) = session_guard::record_tun(&self.app, &interface_name, &session.vip) {
+            self.log(format!("警告：无法记录虚拟网卡信息：{err}"));
+        }
         let tun = Arc::new(device);
         self.log(format!("虚拟网卡已就绪：{interface_name}"));
 
