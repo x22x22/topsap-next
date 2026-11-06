@@ -108,6 +108,23 @@ pub fn parse_netsh_interfaces(text: &str, alias: &str) -> Option<u32> {
     None
 }
 
+/// 从 `netsh interface ipv4 show interfaces` 输出中按别名查找接口跃点数。
+pub fn parse_netsh_interface_metric(text: &str, alias: &str) -> Option<u32> {
+    for line in text.lines() {
+        if !line.contains(alias) {
+            continue;
+        }
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 2 {
+            continue;
+        }
+        if parts[0].parse::<u32>().is_ok() {
+            return parts[1].parse::<u32>().ok();
+        }
+    }
+    None
+}
+
 fn first_ipv4(text: &str) -> Option<String> {
     for token in text.split(|c: char| !(c.is_ascii_digit() || c == '.')) {
         if is_dotted_quad(token) {
@@ -211,6 +228,15 @@ Persistent Routes:
                      20          25        1500  connected     WLAN\n";
         assert_eq!(parse_netsh_interfaces(text, "TopSAP"), Some(42));
         assert_eq!(parse_netsh_interfaces(text, "Missing"), None);
+    }
+
+    #[test]
+    fn netsh_接口跃点数解析() {
+        let text = "Idx Met MTU State Name\n\
+                    42 5 1400 disconnected TopSAP\n\
+                    20 25 1500 connected WLAN\n";
+        assert_eq!(parse_netsh_interface_metric(text, "TopSAP"), Some(5));
+        assert_eq!(parse_netsh_interface_metric(text, "Missing"), None);
     }
 
     #[test]

@@ -33,6 +33,7 @@ enum LedgerEntry {
 pub struct NetConfig {
     alias: String,
     if_index: Option<u32>,
+    if_metric: u32,
     vip: Option<Ipv4Addr>,
     peer: Option<Ipv4Addr>,
     ledger: Vec<LedgerEntry>,
@@ -44,6 +45,7 @@ impl NetConfig {
         Self {
             alias: alias.into(),
             if_index: None,
+            if_metric: WINDOWS_ROUTE_METRIC,
             vip: None,
             peer: None,
             ledger: Vec::new(),
@@ -79,6 +81,10 @@ impl NetConfig {
             ))
         })?;
         self.if_index = Some(index);
+        self.if_metric = self
+            .interface_metric_netsh()
+            .await
+            .unwrap_or(WINDOWS_ROUTE_METRIC);
 
         let name_arg = format!("name={}", self.alias);
         let _ = shell::run(
@@ -380,6 +386,8 @@ impl NetConfig {
         let mut invalid = Vec::new();
         let mut add_errors = std::collections::HashMap::new();
         let mut fallback_ok = 0usize;
+        let mut create_errors: std::collections::BTreeMap<u32, usize> =
+            std::collections::BTreeMap::new();
 
         for route in list {
             let Some((dest, mask)) = route_ipv4(route) else {
@@ -427,7 +435,8 @@ impl NetConfig {
                 let _ = delete_forward_entry(old);
             }
 
-            let row = build_forward_row(dest, mask, next_hop, if_index, WINDOWS_ROUTE_METRIC);
+            let metric = self.if_metric.saturating_add(WINDOWS_ROUTE_METRIC);
+            let row = build_forward_row(dest, mask, next_hop, if_index, metric);
             let mut code = create_forward_entry(&row);
             if code != NO_ERROR {
                 if let Some(old) = table
@@ -441,11 +450,14 @@ impl NetConfig {
 
             let installed = if code == NO_ERROR {
                 true
-            } else if self.route_add_fallback(route, next_hop, if_index).await {
-                fallback_ok += 1;
-                true
             } else {
-                false
+                *create_errors.entry(code).or_default() += 1;
+                if self.route_add_fallback(route, next_hop, if_index).await {
+                    fallback_ok += 1;
+                    true
+                } else {
+                    false
+                }
             };
             if installed {
                 self.note_route(route, next_hop, if_index, false);
@@ -462,8 +474,19 @@ impl NetConfig {
         }
 
         if fallback_ok > 0 {
-            self.notes
-                .push(format!("路由注入：{fallback_ok} 条通过 route add 兜底"));
+            let codes = create_errors
+                .iter()
+                .map(|(code, count)| format!("{code}×{count}"))
+                .collect::<Vec<_>>()
+                .join("，");
+            let detail = if codes.is_empty() {
+                String::new()
+            } else {
+                format!("（CreateIpForwardEntry 返回 {codes}）")
+            };
+            self.notes.push(format!(
+                "路由注入：{fallback_ok} 条通过 route add 兜底{detail}"
+            ));
         }
 
         let after = ip_forward_table();
@@ -691,6 +714,11 @@ impl NetConfig {
         routes::parse_netsh_interfaces(&out.stdout, &self.alias)
     }
 
+    async fn interface_metric_netsh(&self) -> Option<u32> {
+        let out = shell::run("netsh", &["interface", "ipv4", "show", "interfaces"]).await;
+        routes::parse_netsh_interface_metric(&out.stdout, &self.alias)
+    }
+
     async fn interface_ipv4_netsh(&self) -> Vec<String> {
         let name_arg = format!("name={}", self.alias);
         let out = shell::run(
@@ -727,6 +755,7 @@ impl NetConfig {
     }
 }
 
+/// 路由分量跃点；CreateIpForwardEntry 使用接口 Metric + 该值，满足 Metric1 >= 接口 Metric
 const WINDOWS_ROUTE_METRIC: u32 = 1;
 const NO_ERROR: u32 = 0;
 const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
@@ -806,6 +835,7 @@ fn delete_forward_entry(row: &MibIpForwardRow) -> u32 {
     unsafe { DeleteIpForwardEntry(row) }
 }
 
+/// 构造 IPv4 路由行；未使用的 Metric2-5 按 Windows 约定置 0xFFFFFFFF
 fn build_forward_row(
     dest: Ipv4Addr,
     mask: Ipv4Addr,
@@ -828,10 +858,10 @@ fn build_forward_row(
         age: 0,
         next_hop_as: 0,
         metric1: metric,
-        metric2: 0,
-        metric3: 0,
-        metric4: 0,
-        metric5: 0,
+        metric2: u32::MAX,
+        metric3: u32::MAX,
+        metric4: u32::MAX,
+        metric5: u32::MAX,
     }
 }
 
@@ -941,6 +971,10 @@ mod tests {
         assert_eq!(dword_ipv4(row.next_hop), hop);
         assert_eq!(row.if_index, 17);
         assert_eq!(row.metric1, 1);
+        assert_eq!(row.metric2, u32::MAX);
+        assert_eq!(row.metric3, u32::MAX);
+        assert_eq!(row.metric4, u32::MAX);
+        assert_eq!(row.metric5, u32::MAX);
         assert_eq!(row.route_type, MIB_IPROUTE_TYPE_INDIRECT);
         assert_eq!(row.proto, MIB_IPPROTO_NETMGMT);
         assert!(row_matches(&row, dest, mask, hop, 17));
