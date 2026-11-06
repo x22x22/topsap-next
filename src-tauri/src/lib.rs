@@ -100,6 +100,7 @@ pub fn run() {
             commands::conn::engine_snapshot,
             commands::conn::submit_captcha,
             commands::conn::submit_sms,
+            commands::conn::submit_route_conflict,
             commands::conn::resend_sms,
             commands::conn::change_password,
             commands::conn::change_password_for_login,

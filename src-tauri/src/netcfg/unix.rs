@@ -9,9 +9,12 @@ use crate::auth::RouteEntry;
 
 #[cfg(target_os = "macos")]
 use super::macos_text::{
-    ipv4_only, parse_dns_servers, parse_network_service_order, parse_router_info, parse_scutil_dns,
-    route_lookup_matches, route_probe_address,
+    find_route_conflicts, ipv4_only, parse_dns_servers, parse_network_service_order,
+    parse_route_table, parse_router_info, parse_scutil_dns, route_lookup_matches,
+    route_probe_address,
 };
+#[cfg(target_os = "macos")]
+use super::RouteConflict;
 use super::{hosts, shell, NetError, RouteReport};
 
 /// `networksetup setdnsservers` 的参数上限：helper 只允许「命令 + 服务名 + 8 个地址」
@@ -132,9 +135,14 @@ impl NetConfig {
         }
     }
 
-    pub async fn add_routes(&mut self, list: &[RouteEntry]) -> RouteReport {
+    pub async fn add_routes(&mut self, list: &[RouteEntry], takeover: bool) -> RouteReport {
         let mut ok = 0usize;
         let mut failed = Vec::new();
+
+        #[cfg(target_os = "macos")]
+        let conflicts = route_conflicts(list).await;
+        #[cfg(not(target_os = "macos"))]
+        let _ = takeover;
 
         for route in list {
             if self.has_route(&route.dest, route.prefix).await {
@@ -149,6 +157,30 @@ impl NetConfig {
             }
 
             let target = format!("{}/{}", route.dest, route.prefix);
+
+            #[cfg(target_os = "macos")]
+            if let Some(conflict) = conflicts
+                .iter()
+                .find(|item| item.dest == route.dest && item.prefix == route.prefix)
+            {
+                if conflict.ifname == self.ifname {
+                    // 同接口同前缀但回读失败，继续按新路由重写一次
+                } else if takeover {
+                    if !remove_conflict(conflict).await {
+                        failed.push(format!(
+                            "{target} [无法删除冲突路由 {} {}]",
+                            conflict.ifname, conflict.gateway
+                        ));
+                        continue;
+                    }
+                } else {
+                    failed.push(format!(
+                        "{target} [已被 {}（{}）占用]",
+                        conflict.ifname, conflict.gateway
+                    ));
+                    continue;
+                }
+            }
 
             #[cfg(target_os = "linux")]
             let out = shell::run("ip", &["route", "add", &target, "dev", &self.ifname]).await;
@@ -477,6 +509,58 @@ impl NetConfig {
             })
         }
     }
+}
+
+/// 读取当前路由表，找出与待注入网段完全相同的其他接口路由
+#[cfg(target_os = "macos")]
+pub(crate) async fn route_conflicts(list: &[RouteEntry]) -> Vec<RouteConflict> {
+    let out = shell::run_local("/usr/sbin/netstat", &["-rn", "-f", "inet"]).await;
+    if !out.ok {
+        return Vec::new();
+    }
+    find_route_conflicts(list, &parse_route_table(&out.stdout))
+}
+
+/// 删除一条冲突路由；优先按接口删除，失败再按网关删除，删除后回读确认
+#[cfg(target_os = "macos")]
+async fn remove_conflict(conflict: &RouteConflict) -> bool {
+    let attempts: [(&str, &str); 2] = [
+        ("-interface", conflict.ifname.as_str()),
+        ("", conflict.gateway.as_str()),
+    ];
+    for (flag, value) in attempts {
+        let mut args = vec![
+            "-n",
+            "delete",
+            "-net",
+            conflict.dest.as_str(),
+            "-netmask",
+            conflict.mask.as_str(),
+        ];
+        if !flag.is_empty() {
+            args.push(flag);
+        }
+        args.push(value);
+        let _ = shell::run("route", &args).await;
+        if !conflict_present(conflict).await {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(target_os = "macos")]
+async fn conflict_present(conflict: &RouteConflict) -> bool {
+    let probe = route_probe_address(&conflict.dest, conflict.prefix)
+        .unwrap_or_else(|| conflict.dest.clone());
+    let out = shell::run("route", &["-n", "get", &probe]).await;
+    out.ok
+        && route_lookup_matches(
+            &out.stdout,
+            &conflict.dest,
+            conflict.prefix,
+            &conflict.ifname,
+        )
 }
 
 /// 判断 macOS 路由表里是否存在精确命中目标网段与本机接口的路由

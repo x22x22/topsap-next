@@ -404,6 +404,20 @@ const EN: Record<string, string> = {
     "Check complete; no hosts residue found",
   "强杀进程不会触发清理流程，可能残留路由；旧版本遗留的 hosts 标记段也可在此清理。":
     "Force-killing the process skips cleanup and may leave routes behind; any legacy hosts block can also be cleaned here.",
+  // 路由冲突
+  "检测到路由冲突": "Route conflicts detected",
+  "以下网段已被其他接口占用（可能是其他 VPN、旧会话残留或物理网络同网段），继续连接需要先删除这些路由":
+    "The following subnets are already owned by another interface (another VPN, a leftover session, or the physical network); connecting requires removing those routes",
+  "取消连接": "Cancel connection",
+  "接管并连接": "Take over and connect",
+  "接管会删除这些冲突路由，可能中断官方 TopSAP 或其他 VPN；断开后不会自动恢复。":
+    "Taking over deletes these conflicting routes and may interrupt the official TopSAP client or another VPN; they are not restored automatically after disconnecting.",
+  "共 {total} 条": "{total} routes",
+  "涉及接口：{interfaces}": "Interfaces: {interfaces}",
+  "仅显示前 {n} 条，完整清单已写入运行日志。":
+    "Showing the first {n} entries; the full list is written to the runtime log.",
+  "连接流程已结束，无需再确认": "The connection flow has already ended; no confirmation is needed",
+  "提交失败": "Submission failed",
   // 自检
   "提示": "Notice",
   "网卡自检通过（{passed}/{total}）": "Adapter self-test passed ({passed}/{total})",

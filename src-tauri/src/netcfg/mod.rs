@@ -3,6 +3,8 @@
 //! 公共类型放在本模块，平台实现各自维护网卡地址、路由与 DNS 的差异；
 //! hosts 模块仅用于旧版残留检测与清理。
 
+use crate::auth::RouteEntry;
+
 pub mod hosts;
 pub mod shell;
 
@@ -42,6 +44,49 @@ pub struct RouteReport {
     pub total: usize,
     pub ok: usize,
     pub failed: Vec<String>,
+}
+
+/// 与本次连接目标网段完全相同、但属于其他接口的路由
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RouteConflict {
+    pub dest: String,
+    pub mask: String,
+    pub prefix: u8,
+    pub gateway: String,
+    pub ifname: String,
+    pub kind: RouteConflictKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RouteConflictKind {
+    Tunnel,
+    Physical,
+    Loopback,
+    Other,
+}
+
+impl RouteConflictKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Tunnel => "tunnel",
+            Self::Physical => "physical",
+            Self::Loopback => "loopback",
+            Self::Other => "other",
+        }
+    }
+}
+
+/// 读取当前路由表并与待注入网段做精确前缀比对；非 macOS 平台返回空列表。
+pub async fn route_conflicts(list: &[RouteEntry]) -> Vec<RouteConflict> {
+    #[cfg(target_os = "macos")]
+    {
+        unix::route_conflicts(list).await
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = list;
+        Vec::new()
+    }
 }
 
 impl RouteReport {

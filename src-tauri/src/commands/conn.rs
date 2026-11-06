@@ -201,6 +201,12 @@ pub fn submit_sms(state: State<'_, AppState>, code: String) -> bool {
     state.engine.submit_sms(code)
 }
 
+/// 用户确认是否接管冲突路由，唤醒等待中的连接流程
+#[tauri::command]
+pub fn submit_route_conflict(state: State<'_, AppState>, accept: bool) -> bool {
+    state.engine.submit_route_conflict(accept)
+}
+
 /// 已连接状态下修改密码
 #[tauri::command]
 pub async fn change_password(

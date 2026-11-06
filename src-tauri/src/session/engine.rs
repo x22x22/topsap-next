@@ -16,7 +16,8 @@ use tokio_util::sync::CancellationToken;
 use crate::auth::error::password_change_message;
 use crate::auth::{AuthClient, AuthError, AuthParam, LoginSession};
 use crate::dto::{
-    EngineEvent, LineProbeDto, LoginForm, LoginInfoDto, ResourceDto, SessionSummary, StatsDto,
+    EngineEvent, LineProbeDto, LoginForm, LoginInfoDto, ResourceDto, RouteConflictDto,
+    SessionSummary, StatsDto,
 };
 use crate::netcfg::NetConfig;
 use crate::password_reset;
@@ -29,6 +30,7 @@ use super::state::Phase;
 
 const CAPTCHA_TIMEOUT: Duration = Duration::from_secs(120);
 const SMS_TIMEOUT: Duration = Duration::from_secs(300);
+const ROUTE_CONFLICT_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_RECONNECT: u32 = 5;
 
 struct Inner {
@@ -94,6 +96,7 @@ pub struct Engine {
     inner: Mutex<Inner>,
     captcha: Mutex<Option<oneshot::Sender<String>>>,
     sms: Mutex<Option<oneshot::Sender<String>>>,
+    route_conflict: Mutex<Option<oneshot::Sender<bool>>>,
     /// 网关下发的登录失败次数，跨连接保留以复现 auto 验证码策略
     login_err_num: Mutex<std::collections::HashMap<String, u32>>,
     /// 防止用户连点或事件延迟导致并发连接
@@ -117,6 +120,7 @@ impl Engine {
             inner: Mutex::new(Inner::new()),
             captcha: Mutex::new(None),
             sms: Mutex::new(None),
+            route_conflict: Mutex::new(None),
             login_err_num: Mutex::new(std::collections::HashMap::new()),
             connecting: AtomicBool::new(false),
         })
@@ -132,6 +136,12 @@ impl Engine {
 
     fn sms_lock(&self) -> std::sync::MutexGuard<'_, Option<oneshot::Sender<String>>> {
         self.sms.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn route_conflict_lock(&self) -> std::sync::MutexGuard<'_, Option<oneshot::Sender<bool>>> {
+        self.route_conflict
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
     }
 
     fn remembered_login_err_num(&self, host: &str, port: u16, user: &str) -> u32 {
@@ -285,6 +295,14 @@ impl Engine {
         }
         match self.sms_lock().take() {
             Some(tx) => tx.send(code).is_ok(),
+            None => false,
+        }
+    }
+
+    /// 用户确认是否接管路由冲突，唤醒等待中的连接流程
+    pub fn submit_route_conflict(&self, accept: bool) -> bool {
+        match self.route_conflict_lock().take() {
+            Some(tx) => tx.send(accept).is_ok(),
             None => false,
         }
     }
@@ -549,6 +567,33 @@ impl Engine {
                 Err(err) => {
                     self.lock().pending_sms = None;
                     return Err(err.user_message());
+                }
+            }
+        }
+    }
+
+    /// 等待用户确认是否删除冲突路由；取消连接或超时都会结束等待
+    async fn wait_route_conflict(&self) -> Result<bool, String> {
+        let (tx, rx) = oneshot::channel();
+        *self.route_conflict_lock() = Some(tx);
+        let cancel = { self.lock().cancel.clone() };
+
+        tokio::select! {
+            _ = cancel.cancelled() => {
+                let _ = self.route_conflict_lock().take();
+                Err("连接已取消".to_string())
+            }
+            result = tokio::time::timeout(ROUTE_CONFLICT_TIMEOUT, rx) => {
+                match result {
+                    Ok(Ok(accept)) => Ok(accept),
+                    Ok(Err(_)) => Err("路由冲突确认已取消".to_string()),
+                    Err(_) => {
+                        let _ = self.route_conflict_lock().take();
+                        Err(format!(
+                            "路由冲突确认超时（{} 秒）",
+                            ROUTE_CONFLICT_TIMEOUT.as_secs()
+                        ))
+                    }
                 }
             }
         }
@@ -897,6 +942,28 @@ impl Engine {
         session: &LoginSession,
         cancel: &CancellationToken,
     ) -> Result<(), String> {
+        self.set_phase(Phase::Configuring, "正在检查路由冲突");
+        let conflicts = crate::netcfg::route_conflicts(&session.routes).await;
+        let takeover = if conflicts.is_empty() {
+            false
+        } else {
+            let total = conflicts.len();
+            self.log(format!(
+                "检测到 {total} 条路由冲突：{}",
+                summarize_conflicts(&conflicts)
+            ));
+            self.emit(EngineEvent::RouteConflict {
+                total,
+                conflicts: conflicts.into_iter().map(RouteConflictDto::from).collect(),
+            });
+            let accepted = self.wait_route_conflict().await?;
+            if !accepted {
+                return Err("已取消连接：检测到路由冲突".to_string());
+            }
+            self.log("用户选择接管路由冲突，将删除冲突路由后继续");
+            true
+        };
+
         self.set_phase(Phase::CreatingTun, "正在创建虚拟网卡");
         let dll = self.dll_path.clone();
         let vip = session.vip.clone();
@@ -943,17 +1010,17 @@ impl Engine {
         self.log("隧道 TLS 已建立");
 
         self.set_phase(Phase::Configuring, "正在注入路由");
-        let report = net.add_routes(&session.routes).await;
-        if !session.routes.is_empty() && report.ok == 0 {
-            net.cleanup().await;
-            return Err("路由注入全部失败，内网流量无法进入隧道".to_string());
-        }
+        let report = net.add_routes(&session.routes, takeover).await;
         if !report.all_ok() {
             self.log(format!(
                 "警告：{} 条路由未生效（{}）",
                 report.failed.len(),
                 report.failed.join("、")
             ));
+        }
+        if !session.routes.is_empty() && report.ok == 0 {
+            net.cleanup().await;
+            return Err("路由注入全部失败，内网流量无法进入隧道".to_string());
         }
 
         let dns_ok = net.set_dns(&session.dns1, &session.dns2).await;
@@ -1354,6 +1421,24 @@ async fn select_line(
         }
     }
     Err("所有线路均不可用".to_string())
+}
+
+/// 拼出日志用的冲突摘要，避免一次写入几十条
+fn summarize_conflicts(conflicts: &[crate::netcfg::RouteConflict]) -> String {
+    let mut parts: Vec<String> = conflicts
+        .iter()
+        .take(5)
+        .map(|item| {
+            format!(
+                "{}/{} → {}（{}）",
+                item.dest, item.prefix, item.ifname, item.gateway
+            )
+        })
+        .collect();
+    if conflicts.len() > parts.len() {
+        parts.push(format!("等 {} 条", conflicts.len()));
+    }
+    parts.join("、")
 }
 
 /// 并发探测候选线路，返回延迟排序结果，供手动选择线路使用

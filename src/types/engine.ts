@@ -125,6 +125,22 @@ export interface Stats {
   dropped_out: number;
 }
 
+export type RouteConflictKind = "tunnel" | "physical" | "loopback" | "other";
+
+export interface RouteConflict {
+  dest: string;
+  mask: string;
+  prefix: number;
+  gateway: string;
+  ifname: string;
+  kind: RouteConflictKind;
+}
+
+export interface RouteConflictReport {
+  total: number;
+  conflicts: RouteConflict[];
+}
+
 export type SelfTestStatus = "ok" | "fail" | "info";
 
 export interface SelfTestStep {
@@ -182,6 +198,7 @@ export type EngineEvent =
       message: string;
     }
   | { kind: "expiry_reminder"; account_end: number; password_remind: number }
+  | { kind: "route_conflict"; total: number; conflicts: RouteConflict[] }
   | { kind: "error"; message: string };
 
 export const EMPTY_STATS: Stats = {

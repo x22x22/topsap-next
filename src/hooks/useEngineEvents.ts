@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { api } from "../lib/api";
-import { EMPTY_STATS, type EngineEvent, type EnginePhase, type Stats } from "../types/engine";
+import {
+  EMPTY_STATS,
+  type EngineEvent,
+  type EnginePhase,
+  type RouteConflictReport,
+  type Stats,
+} from "../types/engine";
 
 const MAX_LOG_LINES = 800;
 
@@ -21,8 +27,10 @@ export interface EngineView {
     message: string;
   } | null;
   expiryReminder: { accountEnd: number; passwordRemind: number } | null;
+  routeConflict: RouteConflictReport | null;
   clearPasswordChange?: () => void;
   clearExpiryReminder?: () => void;
+  clearRouteConflict?: () => void;
 }
 
 const INITIAL: EngineView = {
@@ -35,6 +43,7 @@ const INITIAL: EngineView = {
   smsChallenge: null,
   passwordChange: null,
   expiryReminder: null,
+  routeConflict: null,
 };
 
 /** 订阅引擎事件并维护界面侧的视图状态 */
@@ -98,6 +107,10 @@ export function useEngineEvents() {
     setView((prev) => (prev.expiryReminder ? { ...prev, expiryReminder: null } : prev));
   }, []);
 
+  const clearRouteConflict = useCallback(() => {
+    setView((prev) => (prev.routeConflict ? { ...prev, routeConflict: null } : prev));
+  }, []);
+
   return {
     ...view,
     clearCaptcha,
@@ -105,6 +118,7 @@ export function useEngineEvents() {
     clearLogs,
     clearPasswordChange,
     clearExpiryReminder,
+    clearRouteConflict,
   };
 }
 
@@ -123,6 +137,7 @@ function applyEvent(prev: EngineView, event: EngineEvent): EngineView {
         label: event.label,
         detail: event.detail,
         smsChallenge: closed ? null : prev.smsChallenge,
+        routeConflict: closed ? null : prev.routeConflict,
       };
     }
     case "log":
@@ -154,6 +169,11 @@ function applyEvent(prev: EngineView, event: EngineEvent): EngineView {
           accountEnd: event.account_end,
           passwordRemind: event.password_remind,
         },
+      };
+    case "route_conflict":
+      return {
+        ...prev,
+        routeConflict: { total: event.total, conflicts: event.conflicts },
       };
     case "error":
       return { ...prev, logs: trimLogs([...prev.logs, `错误：${event.message}`]) };

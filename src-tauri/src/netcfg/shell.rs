@@ -32,6 +32,15 @@ pub async fn run(program: &str, args: &[&str]) -> CmdOutput {
         }
     }
 
+    run_direct(program, args).await
+}
+
+/// 执行只读探测命令，不经过特权 helper；用于读取路由表等无需 root 的场景。
+pub async fn run_local(program: &str, args: &[&str]) -> CmdOutput {
+    run_direct(program, args).await
+}
+
+async fn run_direct(program: &str, args: &[&str]) -> CmdOutput {
     let mut std_cmd = std::process::Command::new(program);
     std_cmd
         .args(args)

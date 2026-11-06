@@ -78,6 +78,18 @@ export function localizeError(message: string): string {
     (_match, reason: string) => `TLS handshake failed: ${localizeReason(reason)}`,
   );
   text = text.replace(
+    /^已取消连接：检测到路由冲突$/,
+    "Connection cancelled: route conflicts were detected",
+  );
+  text = text.replace(
+    /^路由冲突确认已取消$/,
+    "Route conflict confirmation was cancelled",
+  );
+  text = text.replace(
+    /^路由冲突确认超时（(\d+) 秒）$/,
+    "Route conflict confirmation timed out after $1 seconds",
+  );
+  text = text.replace(
     /^配置网卡地址失败（当前：(.+)）；(请确认特权 helper 已安装，或以 root\/sudo 运行|请以 root 运行（sudo \/usr\/bin\/topsap-client）)$/,
     (_match, current: string, hint: string) => {
       const action = hint.startsWith("请确认")

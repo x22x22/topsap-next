@@ -270,7 +270,9 @@ impl NetConfig {
     ///
     /// 批量执行后再回读，避免每条路由都跑一次 `route print`；
     /// 第一轮失败的用 PowerShell 补一次，仍失败则计入 failed。
-    pub async fn add_routes(&mut self, list: &[RouteEntry]) -> RouteReport {
+    pub async fn add_routes(&mut self, list: &[RouteEntry], takeover: bool) -> RouteReport {
+        // Windows 的 on-link 路由由系统自动合并，不存在 macOS 的精确前缀冲突
+        let _ = takeover;
         let Some(index) = self.if_index else {
             return RouteReport {
                 total: list.len(),

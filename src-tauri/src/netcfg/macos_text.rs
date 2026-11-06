@@ -2,6 +2,10 @@
 
 use std::net::IpAddr;
 
+use crate::auth::RouteEntry;
+
+use super::{RouteConflict, RouteConflictKind};
+
 /// `route -n get <dest>` 中与路由匹配相关的字段
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RouteLookup {
@@ -150,6 +154,127 @@ pub fn route_lookup_matches(text: &str, dest: &str, prefix: u8, ifname: &str) ->
         return false;
     };
     network_value(actual, prefix) == network_value(expected, prefix)
+}
+
+/// `netstat -rn -f inet` 中的一行路由
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RouteTableEntry {
+    pub dest: String,
+    pub prefix: u8,
+    pub gateway: String,
+    pub ifname: String,
+}
+
+/// 解析 macOS `netstat -rn -f inet` 输出；跳过表头与无法识别的行
+pub fn parse_route_table(text: &str) -> Vec<RouteTableEntry> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() < 4 {
+            continue;
+        }
+        let Some((dest, prefix)) = parse_netstat_destination(fields[0]) else {
+            continue;
+        };
+        let ifname = fields[3];
+        if !is_ifname(ifname) {
+            continue;
+        }
+        out.push(RouteTableEntry {
+            dest: u32_to_ipv4(dest),
+            prefix,
+            gateway: fields[1].to_string(),
+            ifname: ifname.to_string(),
+        });
+    }
+    out
+}
+
+/// 找出与待注入网段完全相同、但位于其他接口的路由
+pub fn find_route_conflicts(
+    routes: &[RouteEntry],
+    table: &[RouteTableEntry],
+) -> Vec<RouteConflict> {
+    let mut out: Vec<RouteConflict> = Vec::new();
+    for route in routes {
+        let Some(value) = ipv4_value(&route.dest) else {
+            continue;
+        };
+        let expected = network_value(value, route.prefix);
+        for entry in table {
+            if entry.prefix != route.prefix {
+                continue;
+            }
+            let Some(entry_value) = ipv4_value(&entry.dest) else {
+                continue;
+            };
+            if network_value(entry_value, route.prefix) != expected {
+                continue;
+            }
+            if out.iter().any(|item| {
+                item.dest == route.dest
+                    && item.prefix == route.prefix
+                    && item.ifname == entry.ifname
+            }) {
+                continue;
+            }
+            out.push(RouteConflict {
+                dest: route.dest.clone(),
+                mask: route.mask.clone(),
+                prefix: route.prefix,
+                gateway: entry.gateway.clone(),
+                ifname: entry.ifname.clone(),
+                kind: classify_route_interface(&entry.ifname),
+            });
+        }
+    }
+    out
+}
+
+fn parse_netstat_destination(text: &str) -> Option<(u32, u8)> {
+    if text == "default" {
+        return Some((0, 0));
+    }
+    let (addr, explicit) = match text.split_once('/') {
+        Some((addr, prefix)) => (addr, Some(prefix.parse::<u8>().ok()?)),
+        None => (text, None),
+    };
+    let value = ipv4_value(addr)?;
+    let prefix = match explicit {
+        Some(prefix) if prefix <= 32 => prefix,
+        Some(_) => return None,
+        None => match addr.split('.').count() {
+            1 => 8,
+            2 => 16,
+            3 => 24,
+            _ => 32,
+        },
+    };
+    Some((network_value(value, prefix), prefix))
+}
+
+fn is_ifname(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_'))
+}
+
+fn classify_route_interface(ifname: &str) -> RouteConflictKind {
+    if ifname.starts_with("utun") {
+        RouteConflictKind::Tunnel
+    } else if ifname == "lo0" {
+        RouteConflictKind::Loopback
+    } else if ifname.starts_with("en")
+        || ifname.starts_with("eth")
+        || ifname.starts_with("bridge")
+        || ifname.starts_with("awdl")
+        || ifname.starts_with("llw")
+    {
+        RouteConflictKind::Physical
+    } else {
+        RouteConflictKind::Other
+    }
 }
 
 /// 只保留 IPv4 地址，避免把 IPv6 解析器写入网络服务 DNS
@@ -338,5 +463,81 @@ mod tests {
         let text =
             "destination: 198.51.100.0/24\n       mask: 255.255.255.0\n    interface: utun4\n";
         assert!(route_lookup_matches(text, "198.51.100.0", 24, "utun4"));
+    }
+
+    fn route_entry(dest: &str, mask: &str, prefix: u8) -> RouteEntry {
+        RouteEntry {
+            dest: dest.to_string(),
+            mask: mask.to_string(),
+            prefix,
+        }
+    }
+
+    const ROUTE_TABLE: &str = "Routing tables\n\n\
+        Internet:\n\
+        Destination        Gateway            Flags        Netif Expire\n\
+        default            10.186.33.1        UGScg          en7\n\
+        8.130.175.152/32   172.21.8.107       UGSc           utun8\n\
+        10.10.20/23        172.21.8.107       UGSc           utun8\n\
+        10.22.1/24         172.21.8.107       UGSc           utun8\n\
+        10.22.1.10/32      172.21.8.107       UGSc           utun8\n\
+        127                127.0.0.1          UCS            lo0\n\
+        192.168.1          link#12            UCS            en0      !\n";
+
+    #[test]
+    fn 解析路由表_识别目标前缀与接口() {
+        let table = parse_route_table(ROUTE_TABLE);
+        assert_eq!(table.len(), 7);
+        assert_eq!(table[0].dest, "0.0.0.0");
+        assert_eq!(table[0].prefix, 0);
+        assert_eq!(table[0].ifname, "en7");
+        assert_eq!(table[1].dest, "8.130.175.152");
+        assert_eq!(table[1].prefix, 32);
+        assert_eq!(table[2].dest, "10.10.20.0");
+        assert_eq!(table[2].prefix, 23);
+        assert_eq!(table[5].dest, "127.0.0.0");
+        assert_eq!(table[5].prefix, 8);
+        assert_eq!(table[6].dest, "192.168.1.0");
+        assert_eq!(table[6].prefix, 24);
+        assert_eq!(table[6].gateway, "link#12");
+    }
+
+    #[test]
+    fn 路由冲突_只匹配目标与前缀完全一致() {
+        let table = parse_route_table(ROUTE_TABLE);
+        let routes = vec![
+            route_entry("10.22.1.0", "255.255.255.0", 24),
+            route_entry("10.22.2.0", "255.255.255.0", 24),
+            route_entry("10.22.1.10", "255.255.255.255", 32),
+            route_entry("10.10.20.0", "255.255.254.0", 23),
+        ];
+        let conflicts = find_route_conflicts(&routes, &table);
+        assert_eq!(conflicts.len(), 3);
+        assert_eq!(conflicts[0].dest, "10.22.1.0");
+        assert_eq!(conflicts[0].ifname, "utun8");
+        assert_eq!(conflicts[0].kind, RouteConflictKind::Tunnel);
+        assert_eq!(conflicts[1].dest, "10.22.1.10");
+        assert_eq!(conflicts[1].prefix, 32);
+        assert_eq!(conflicts[2].dest, "10.10.20.0");
+    }
+
+    #[test]
+    fn 路由冲突_区分隧道物理与环回接口() {
+        let table = parse_route_table(ROUTE_TABLE);
+        let routes = vec![route_entry("192.168.1.0", "255.255.255.0", 24)];
+        let conflicts = find_route_conflicts(&routes, &table);
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].kind, RouteConflictKind::Physical);
+
+        let table = parse_route_table("127/8 127.0.0.1 UCS lo0\n");
+        let conflicts = find_route_conflicts(&[route_entry("127.0.0.0", "255.0.0.0", 8)], &table);
+        assert_eq!(conflicts[0].kind, RouteConflictKind::Loopback);
+    }
+
+    #[test]
+    fn 路由冲突_无精确匹配时为空() {
+        let table = parse_route_table(ROUTE_TABLE);
+        let routes = vec![route_entry("10.22.0.0", "255.255.0.0", 16)];
+        assert!(find_route_conflicts(&routes, &table).is_empty());
     }
 }

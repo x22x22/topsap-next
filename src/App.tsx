@@ -5,11 +5,13 @@ import { toast, Toaster } from "sonner";
 import { AppShell, type PageId } from "./components/AppShell";
 import { Button, Modal } from "./components/ui";
 import { CaptchaDialog } from "./components/CaptchaDialog";
+import { RouteConflictDialog } from "./components/RouteConflictDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { SmsDialog } from "./components/SmsDialog";
 import { useConnect, useDisconnect, submitCaptcha, submitSms } from "./hooks/useConnection";
 import { useEngineEvents } from "./hooks/useEngineEvents";
 import { api } from "./lib/api";
+import { firstLine } from "./lib/format";
 import { applyTheme } from "./lib/theme";
 import { useI18n } from "./lib/i18n";
 import { queryKeys } from "./lib/query";
@@ -31,6 +33,7 @@ export default function App() {
   const [importNoticeOpen, setImportNoticeOpen] = useState(true);
   const [updateOpen, setUpdateOpen] = useState(false);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [routeDeciding, setRouteDeciding] = useState(false);
   const [summary, setSummary] = useState<SessionSummary | null>(null);
   const [resolvedTheme, setResolvedTheme] = useState<"dark" | "light">("dark");
   const [collapsed, setCollapsed] = useState(
@@ -143,6 +146,22 @@ export default function App() {
     if (engine.phase === "idle" || engine.phase === "failed") setSummary(null);
   }, [engine.phase]);
 
+  const decideRouteConflict = async (accept: boolean) => {
+    if (routeDeciding) return;
+    setRouteDeciding(true);
+    try {
+      const accepted = await api.submitRouteConflict(accept);
+      if (!accepted) {
+        toast.error(t("连接流程已结束，无需再确认"));
+      }
+      engine.clearRouteConflict?.();
+    } catch (error) {
+      toast.error(`${t("提交失败")}：${firstLine(String(error))}`);
+    } finally {
+      setRouteDeciding(false);
+    }
+  };
+
   const handleNavigate = (next: PageId) => {
     if (next === "settings") {
       setSettingsOpen(true);
@@ -221,6 +240,13 @@ export default function App() {
           // 取消验证码等同于取消本次登录，触发后端清理
           disconnect.mutate();
         }}
+      />
+
+      <RouteConflictDialog
+        report={engine.routeConflict}
+        busy={routeDeciding}
+        onAccept={() => void decideRouteConflict(true)}
+        onCancel={() => void decideRouteConflict(false)}
       />
 
       <SmsDialog

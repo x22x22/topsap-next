@@ -269,7 +269,7 @@ pub async fn run<F: FnMut(&SelfTestStep)>(dll_path: &Path, on_step: F) -> SelfTe
         mask: TEST_ROUTE_MASK.to_string(),
         prefix: 16,
     };
-    match tokio::time::timeout(STEP_TIMEOUT, net.add_routes(&[route])).await {
+    match tokio::time::timeout(STEP_TIMEOUT, net.add_routes(&[route], false)).await {
         Ok(report) if report.all_ok() => b.ok(
             "注入测试路由",
             format!("{TEST_ROUTE_DEST}/{TEST_ROUTE_MASK} 已生效"),

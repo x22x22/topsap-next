@@ -35,6 +35,8 @@ export const api = {
   snapshot: () => call<Stats>("engine_snapshot"),
   submitCaptcha: (code: string) => call<boolean>("submit_captcha", { code }),
   submitSms: (code: string) => call<boolean>("submit_sms", { code }),
+  submitRouteConflict: (accept: boolean) =>
+    call<boolean>("submit_route_conflict", { accept }),
   resendSms: () => call<number>("resend_sms"),
   changePassword: (oldPassword: string, newPassword: string) =>
     call<void>("change_password", { oldPassword, newPassword }),

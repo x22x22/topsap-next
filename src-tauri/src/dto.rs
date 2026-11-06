@@ -157,6 +157,30 @@ pub struct SelfTestDto {
     pub steps: Vec<SelfTestStepDto>,
 }
 
+/// 与其他接口完全同前缀的现有路由，供接管确认弹窗展示
+#[derive(Debug, Clone, Serialize)]
+pub struct RouteConflictDto {
+    pub dest: String,
+    pub mask: String,
+    pub prefix: u8,
+    pub gateway: String,
+    pub ifname: String,
+    pub kind: String,
+}
+
+impl From<crate::netcfg::RouteConflict> for RouteConflictDto {
+    fn from(value: crate::netcfg::RouteConflict) -> Self {
+        Self {
+            dest: value.dest,
+            mask: value.mask,
+            prefix: value.prefix,
+            gateway: value.gateway,
+            ifname: value.ifname,
+            kind: value.kind.as_str().to_string(),
+        }
+    }
+}
+
 /// 引擎向界面推送的事件，统一走 `engine://event` 通道
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -196,6 +220,11 @@ pub enum EngineEvent {
     ExpiryReminder {
         account_end: i64,
         password_remind: i64,
+    },
+    /// 检测到其他接口已占用本次要注入的网段，等待用户确认是否接管
+    RouteConflict {
+        total: usize,
+        conflicts: Vec<RouteConflictDto>,
     },
 }
 
