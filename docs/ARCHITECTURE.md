@@ -302,6 +302,7 @@ TLS 建连（不校验证书、不发 SNI）
 - 路由冲突：macOS 连接前读取 `netstat -rn -f inet`，按目标网段与前缀精确比对；发现其他接口同前缀路由时弹窗列出，用户确认接管后先删除冲突路由再注入，取消或超时则中止连接
 - utun 残留清理：诊断页列出带 IPv4 地址的 utun 及关联路由；清理前校验 `utun*`、拒绝当前连接与自检中的接口，执行 `ifconfig utunN down` 后删除剩余路由，并在日志中记录结果
 - 路由回读：macOS 必须比对 `route -n get` 返回的 `destination` 与 `mask`；只按接口判断会把被 `/24` 覆盖的 `/32`、被 `/24` 覆盖的 `/31` 误判为已存在而跳过。删除失败时再按 VIP-1 网关形式补删一次（同时兼容旧版本按 VIP 写入的路由）
+- Windows 连接性能：配址统一使用 `netsh` + 100ms 轮询；资源路由按批（50 条）交给一次 `cmd /C` 执行 `route ADD`，失败回退按批执行 `New-NetRoute`；旁路路由只读一次 `route print -4`，同时解析活动路由与默认网关；Win7 保持 `netsh` + 600ms
 - 自检收发：写方向向 utun 注入 ICMP 请求验证写入；macOS 读方向由系统 `ping -S <VIP> <测试目标>` 主动发包，读循环收到该 ICMP Echo 请求即证明「系统 → utun」读路径与测试路由生效，Windows / Linux 仍等待注入报文的系统回包；测试路由注入前先检查同前缀冲突（macOS），冲突时直接报出占用接口
 - 内网域名：解析 `dns_info.dns_list` 后仅保留在会话数据中，不修改系统 hosts（与原客户端一致）；`hosts` 模块保留用于清理旧版本残留
 - DNS：Windows 设置网卡 DNS `dns1_v4` / `dns2_v4`；macOS 通过 `networksetup` 把当前网络服务改为手动 DNS，VPN DNS 在前、原 DNS 在后，断开时恢复原列表或自动获取；原 DNS 为自动获取（`-getdnsservers` 为空）时读取 `scutil --dns` 的默认接口解析器（含 IPv6），仍为空则回退 `networksetup -getinfo` 的 `Router`；Linux 不修改全局 DNS

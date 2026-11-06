@@ -46,10 +46,10 @@ impl NetConfig {
 
     /// 配置网卡 IPv4 地址。
     ///
-    /// Wintun 网卡刚创建时需要一点时间才可配置，且 `netsh` 在部分系统上会
-    /// 「返回成功但地址没生效」，因此最多三轮、每轮换一种方式并回读校验。
+    /// 统一使用 `netsh`，避免 PowerShell 启动开销；地址生效通常只需 100-300ms，
+    /// 因此改为短间隔轮询而不是固定等待。最多三轮，每轮换一种写法并回读校验。
     pub async fn configure_interface(&mut self, vip: &str, mask: &str) -> Result<u32, NetError> {
-        let index = self.if_index_by_name().await.ok_or_else(|| {
+        let index = self.if_index_with_retry().await.ok_or_else(|| {
             NetError::Interface(format!(
                 "未找到虚拟网卡「{}」，驱动可能尚未就绪",
                 self.alias
@@ -64,82 +64,24 @@ impl NetConfig {
         )
         .await;
 
-        if crate::platform::is_windows7() {
-            return self
-                .configure_interface_win7(index, &name_arg, vip, mask)
-                .await;
-        }
-
-        let prefix_len = routes::mask_to_prefix_len(mask)
-            .ok_or_else(|| NetError::Interface(format!("掩码「{mask}」不是合法的连续掩码")))?;
-
-        let mut attempts = Vec::new();
-        let mut actual: Vec<String> = Vec::new();
-
-        for round in 1..=3u32 {
-            if round == 1 || round == 3 {
-                let out = shell::run(
-                    "netsh",
-                    &[
-                        "interface",
-                        "ipv4",
-                        "set",
-                        "address",
-                        &name_arg,
-                        "static",
-                        vip,
-                        mask,
-                    ],
-                )
-                .await;
-                attempts.push(format!(
-                    "第{round}轮 netsh={}",
-                    if out.ok { "ok" } else { "fail" }
-                ));
-            } else {
-                let script = format!(
-                    "Remove-NetIPAddress -InterfaceIndex {index} -AddressFamily IPv4 -Confirm:$false -ErrorAction SilentlyContinue; \
-                     New-NetIPAddress -InterfaceIndex {index} -IPAddress {vip} -PrefixLength {prefix_len} -ErrorAction SilentlyContinue"
-                );
-                let out = shell::powershell(&script).await;
-                attempts.push(format!(
-                    "第{round}轮 powershell={}",
-                    if out.ok { "ok" } else { "fail" }
-                ));
-            }
-
-            tokio::time::sleep(Duration::from_millis(600)).await;
-            actual = self.interface_ipv4(index).await;
-            if actual.iter().any(|a| a == vip) {
-                break;
-            }
-        }
-
-        if !actual.iter().any(|a| a == vip) {
+        if routes::mask_to_prefix_len(mask).is_none() {
             return Err(NetError::Interface(format!(
-                "设置网卡地址失败（当前：{}；{}）",
-                if actual.is_empty() {
-                    "无地址".to_string()
-                } else {
-                    actual.join(",")
-                },
-                attempts.join("，")
+                "掩码「{mask}」不是合法的连续掩码"
             )));
         }
 
-        self.apply_mtu().await;
-
-        Ok(index)
+        self.configure_interface_netsh(index, &name_arg, vip, mask, !crate::platform::is_windows7())
+            .await
     }
 
-    /// Windows 7 兼容路径：系统只有 PowerShell 2.0，没有 NetTCPIP 模块，
-    /// 因此全部使用 netsh 并回读校验。
-    async fn configure_interface_win7(
+    /// 统一用 netsh 配址并回读；Windows 10/11 使用 100ms 轮询，Windows 7 保持 600ms 固定等待。
+    async fn configure_interface_netsh(
         &mut self,
         index: u32,
         name_arg: &str,
         vip: &str,
         mask: &str,
+        fast_poll: bool,
     ) -> Result<u32, NetError> {
         let mut attempts = Vec::new();
         let mut actual: Vec<String> = Vec::new();
@@ -188,8 +130,12 @@ impl NetConfig {
                 if out.ok { "ok" } else { "fail" }
             ));
 
-            tokio::time::sleep(Duration::from_millis(600)).await;
-            actual = self.interface_ipv4_netsh().await;
+            actual = if fast_poll {
+                self.wait_for_ipv4(vip).await
+            } else {
+                tokio::time::sleep(Duration::from_millis(600)).await;
+                self.interface_ipv4_netsh().await
+            };
             if actual.iter().any(|a| a == vip) {
                 break;
             }
@@ -229,16 +175,13 @@ impl NetConfig {
 
     /// 给网关 IP 加一条旁路路由，否则隧道连接会自己走进隧道形成环路。
     pub async fn bypass_gateway(&mut self, gateway_ip: &str) -> bool {
-        if self
-            .active_routes()
-            .await
-            .contains(&(gateway_ip.to_string(), "255.255.255.255".to_string()))
-        {
+        let (active, default_gateway) = self.route_snapshot().await;
+        if active.contains(&(gateway_ip.to_string(), "255.255.255.255".to_string())) {
             // 已有路由（可能是上次残留或用户手配），不接管、不删除
             return true;
         }
 
-        let Some((default_gw, _)) = self.default_gateway().await else {
+        let Some((default_gw, _)) = default_gateway else {
             return false;
         };
 
@@ -300,35 +243,19 @@ impl NetConfig {
         }
 
         if !pending.is_empty() {
+            const BATCH: usize = 50;
             let if_str = index.to_string();
-            for route in &pending {
-                let _ = shell::run(
-                    "route",
-                    &[
-                        "ADD",
-                        &route.dest,
-                        "MASK",
-                        &route.mask,
-                        "0.0.0.0",
-                        "IF",
-                        &if_str,
-                        "METRIC",
-                        "1",
-                    ],
-                )
-                .await;
+            for chunk in pending.chunks(BATCH) {
+                let script = route_add_script(&if_str, chunk);
+                let _ = shell::run("cmd", &["/D", "/C", &script]).await;
             }
 
             let mut still = self.record_applied(&pending).await;
 
             // New-NetRoute 属于 PowerShell 3.0+ 的 NetTCPIP 模块，Windows 7 不可用
             if !still.is_empty() && !crate::platform::is_windows7() {
-                for route in &still {
-                    let prefix = format!("{}/{}", route.dest, route.prefix);
-                    let script = format!(
-                        "New-NetRoute -DestinationPrefix {prefix} -InterfaceIndex {index} \
-                         -NextHop 0.0.0.0 -RouteMetric 1 -ErrorAction SilentlyContinue"
-                    );
+                for chunk in still.chunks(BATCH) {
+                    let script = new_net_route_script(index, chunk);
                     let _ = shell::powershell(&script).await;
                 }
                 still = self.record_applied(&still).await;
@@ -441,24 +368,16 @@ impl NetConfig {
         }
     }
 
-    async fn if_index_by_name(&self) -> Option<u32> {
-        if crate::platform::is_windows7() {
-            return self.if_index_by_netsh().await;
-        }
-
-        let script = format!(
-            "(Get-NetAdapter -Name '{}' -ErrorAction SilentlyContinue | Select-Object -First 1).ifIndex",
-            self.alias
-        );
-        let ps = shell::powershell(&script).await;
-        if ps.ok {
-            if let Ok(index) = ps.stdout.trim().parse::<u32>() {
-                if index > 0 {
-                    return Some(index);
-                }
+    async fn if_index_with_retry(&self) -> Option<u32> {
+        for attempt in 0..10u32 {
+            if let Some(index) = self.if_index_by_netsh().await {
+                return Some(index);
+            }
+            if attempt < 9 {
+                tokio::time::sleep(Duration::from_millis(100)).await;
             }
         }
-        self.if_index_by_netsh().await
+        None
     }
 
     async fn if_index_by_netsh(&self) -> Option<u32> {
@@ -466,26 +385,19 @@ impl NetConfig {
         routes::parse_netsh_interfaces(&out.stdout, &self.alias)
     }
 
-    async fn interface_ipv4(&self, index: u32) -> Vec<String> {
-        if crate::platform::is_windows7() {
-            return self.interface_ipv4_netsh().await;
+    /// 短间隔轮询地址是否生效，避免固定等待 600ms
+    async fn wait_for_ipv4(&self, vip: &str) -> Vec<String> {
+        let mut actual = Vec::new();
+        for attempt in 0..10u32 {
+            actual = self.interface_ipv4_netsh().await;
+            if actual.iter().any(|a| a == vip) {
+                return actual;
+            }
+            if attempt < 9 {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
         }
-
-        let script = format!(
-            "(Get-NetIPAddress -InterfaceIndex {index} -AddressFamily IPv4 -ErrorAction SilentlyContinue \
-             | Select-Object -ExpandProperty IPAddress) -join ','"
-        );
-        let out = shell::powershell(&script).await;
-        let parsed: Vec<String> = out
-            .stdout
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-        if parsed.is_empty() {
-            return self.interface_ipv4_netsh().await;
-        }
-        parsed
+        actual
     }
 
     async fn interface_ipv4_netsh(&self) -> Vec<String> {
@@ -509,10 +421,47 @@ impl NetConfig {
             .contains(&(dest.to_string(), mask.to_string()))
     }
 
-    async fn default_gateway(&self) -> Option<(String, String)> {
+    /// 一次读取同时拿到活动路由与默认网关，避免重复执行 route print
+    async fn route_snapshot(
+        &self,
+    ) -> (
+        std::collections::HashSet<(String, String)>,
+        Option<(String, String)>,
+    ) {
         let out = shell::run("route", &["print", "-4"]).await;
-        routes::parse_default_gateway(&out.stdout)
+        (
+            routes::parse_active_routes(&out.stdout),
+            routes::parse_default_gateway(&out.stdout),
+        )
     }
+}
+
+/// 拼接一批 `route ADD` 命令，交给一次 cmd 进程执行
+fn route_add_script(if_index: &str, routes: &[&RouteEntry]) -> String {
+    routes
+        .iter()
+        .map(|route| {
+            format!(
+                "route ADD {} MASK {} 0.0.0.0 IF {} METRIC 1",
+                route.dest, route.mask, if_index
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" & ")
+}
+
+/// 拼接一批 `New-NetRoute` 语句，交给一次 PowerShell 执行
+fn new_net_route_script(index: u32, routes: &[&RouteEntry]) -> String {
+    routes
+        .iter()
+        .map(|route| {
+            format!(
+                "New-NetRoute -DestinationPrefix {}/{} -InterfaceIndex {index} -NextHop 0.0.0.0 -RouteMetric 1 -ErrorAction SilentlyContinue",
+                route.dest, route.prefix
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 /// 当前进程是否具备管理员权限
@@ -548,6 +497,39 @@ pub async fn purge_hosts_residue() -> Result<bool, NetError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn route_entry(dest: &str, mask: &str, prefix: u8) -> RouteEntry {
+        RouteEntry {
+            dest: dest.to_string(),
+            mask: mask.to_string(),
+            prefix,
+        }
+    }
+
+    #[test]
+    fn 批量路由命令_拼接正确() {
+        let routes = [
+            route_entry("198.51.100.0", "255.255.255.0", 24),
+            route_entry("203.0.113.0", "255.255.255.0", 24),
+        ];
+        let refs: Vec<&RouteEntry> = routes.iter().collect();
+        assert_eq!(
+            route_add_script("7", &refs),
+            "route ADD 198.51.100.0 MASK 255.255.255.0 0.0.0.0 IF 7 METRIC 1 & \
+             route ADD 203.0.113.0 MASK 255.255.255.0 0.0.0.0 IF 7 METRIC 1"
+        );
+    }
+
+    #[test]
+    fn 批量_netroute_命令_拼接正确() {
+        let routes = [route_entry("198.51.100.0", "255.255.255.0", 24)];
+        let refs: Vec<&RouteEntry> = routes.iter().collect();
+        assert_eq!(
+            new_net_route_script(7, &refs),
+            "New-NetRoute -DestinationPrefix 198.51.100.0/24 -InterfaceIndex 7 \
+             -NextHop 0.0.0.0 -RouteMetric 1 -ErrorAction SilentlyContinue"
+        );
+    }
 
     #[test]
     fn 路由报告_all_ok_语义() {
