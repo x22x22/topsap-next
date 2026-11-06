@@ -310,6 +310,8 @@ const EN: Record<string, string> = {
   "创建虚拟网卡与会话": "Create virtual adapter and session",
   "配置网卡地址": "Configure adapter address",
   "回读网卡地址": "Read back adapter address",
+  "测试路由冲突": "Test route conflict",
+  "后续测试": "Remaining tests",
   "注入测试路由": "Inject test route",
   "启动读循环": "Start read loop",
   "发送方向（应用 → 网卡）": "Send path (app → adapter)",

@@ -269,6 +269,27 @@ pub async fn run<F: FnMut(&SelfTestStep)>(dll_path: &Path, on_step: F) -> SelfTe
         mask: TEST_ROUTE_MASK.to_string(),
         prefix: 16,
     };
+
+    #[cfg(target_os = "macos")]
+    {
+        let conflicts = crate::netcfg::route_conflicts(std::slice::from_ref(&route)).await;
+        if let Some(conflict) = conflicts
+            .iter()
+            .find(|item| item.ifname != device.interface_name())
+        {
+            b.fail(
+                "测试路由冲突",
+                format!(
+                    "{TEST_ROUTE_DEST}/{TEST_ROUTE_MASK} 已被 {}（{}）占用；请先在诊断页清理 utun 残留或退出其他 VPN",
+                    conflict.ifname, conflict.gateway
+                ),
+            );
+            b.info("后续测试", "已跳过；处理冲突后重新运行自检");
+            return finish_with_cleanup(b, &mut net, device, dll_path).await;
+        }
+        b.info("测试路由冲突", "未发现同前缀路由");
+    }
+
     match tokio::time::timeout(STEP_TIMEOUT, net.add_routes(&[route], false)).await {
         Ok(report) if report.all_ok() => b.ok(
             "注入测试路由",
@@ -317,30 +338,55 @@ pub async fn run<F: FnMut(&SelfTestStep)>(dll_path: &Path, on_step: F) -> SelfTe
         b.fail("发送方向（应用 → 网卡）", "写入失败，网卡会话不可用");
     }
 
-    match tokio::time::timeout(Duration::from_secs(3), rx.recv()).await {
+    #[cfg(windows)]
+    let ping_args: &[&str] = &["-n", "1", "-w", "1000", "-S", TEST_VIP, TEST_PING_TARGET];
+    #[cfg(target_os = "macos")]
+    let ping_args: &[&str] = &["-c", "1", "-W", "1000", "-S", TEST_VIP, TEST_PING_TARGET];
+    #[cfg(target_os = "linux")]
+    let ping_args: &[&str] = &["-c", "1", "-W", "1", "-S", TEST_VIP, TEST_PING_TARGET];
+    #[cfg(target_os = "macos")]
+    let ping_program = "/sbin/ping";
+    #[cfg(not(target_os = "macos"))]
+    let ping_program = "ping";
+
+    let received = async {
+        loop {
+            match rx.recv().await {
+                Some(packet) if is_system_echo_request(&packet, TEST_VIP, TEST_PING_TARGET) => {
+                    return Some(packet);
+                }
+                Some(_) => continue,
+                None => return None,
+            }
+        }
+    };
+    let (_, received) = tokio::join!(
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            shell::run_local(ping_program, ping_args)
+        ),
+        tokio::time::timeout(Duration::from_secs(3), received)
+    );
+    match received {
         Ok(Some(packet)) => b.ok(
             "接收方向（网卡 → 应用）",
-            format!("收到系统回包：{}", describe_packet(&packet)),
+            format!("收到系统发往网卡的 ICMP 请求：{}", describe_packet(&packet)),
         ),
         Ok(None) => b.fail("接收方向（网卡 → 应用）", "读循环提前结束"),
         Err(_) => b.fail(
             "接收方向（网卡 → 应用）",
-            "3 秒内未收到系统回包；请检查测试路由是否生效、网卡读路径是否可用",
+            "3 秒内未收到系统发往网卡的 ICMP 请求；请检查测试路由是否生效、网卡读路径是否可用",
         ),
     }
 
-    #[cfg(windows)]
-    let ping_args: &[&str] = &["-n", "1", "-w", "1000", TEST_PING_TARGET];
-    #[cfg(unix)]
-    let ping_args: &[&str] = &["-c", "1", "-W", "1", TEST_PING_TARGET];
-    match tokio::time::timeout(STEP_TIMEOUT, shell::run("ping", ping_args)).await {
+    match tokio::time::timeout(STEP_TIMEOUT, shell::run_local(ping_program, ping_args)).await {
         Ok(ping) if ping.ok => b.ok(
             "系统路由（跨网段投递）",
             format!("ping {TEST_PING_TARGET} 成功，系统已把包交给网卡"),
         ),
         Ok(_) => b.info(
             "系统路由（跨网段投递）",
-            format!("ping {TEST_PING_TARGET} 未通（同网段无对端属正常，不影响真实连接）"),
+            format!("ping {TEST_PING_TARGET} 未通（测试目标无对端，未收到回包属正常）"),
         ),
         Err(_) => b.info("系统路由（跨网段投递）", "ping 执行超时（60 秒）"),
     }
@@ -510,6 +556,22 @@ pub fn describe_packet(packet: &[u8]) -> String {
     }
 }
 
+/// 判断报文是否为系统发往测试目标的 IPv4 ICMP Echo 请求
+fn is_system_echo_request(packet: &[u8], src: &str, dst: &str) -> bool {
+    if packet.len() < 28 || packet[0] >> 4 != 4 || packet[9] != 1 || packet[20] != 8 {
+        return false;
+    }
+    let packet_src = format!(
+        "{}.{}.{}.{}",
+        packet[12], packet[13], packet[14], packet[15]
+    );
+    let packet_dst = format!(
+        "{}.{}.{}.{}",
+        packet[16], packet[17], packet[18], packet[19]
+    );
+    packet_src == src && packet_dst == dst
+}
+
 /// 构造完整的 IPv4 + ICMP Echo 请求
 pub fn build_icmp_echo_request(src: [u8; 4], dst: [u8; 4], id: u16, seq: u16) -> Vec<u8> {
     let mut icmp = vec![8u8, 0, 0, 0];
@@ -587,7 +649,7 @@ mod tests {
     }
 
     #[test]
-    fn 接收方向_以本机地址触发回包() {
+    fn 注入报文_以本机地址为目的地() {
         assert_eq!(
             format!(
                 "{}.{}.{}.{}",
@@ -605,6 +667,24 @@ mod tests {
         let pkt = build_icmp_echo_request(ECHO_SOURCE, ECHO_TARGET, 1, 1);
         assert_eq!(pkt[16..20], ECHO_TARGET, "目的地址必须是本机 VIP");
         assert_eq!(pkt[12..16], ECHO_SOURCE, "源地址必须落在测试路由网段");
+    }
+
+    #[test]
+    fn 系统读路径_识别_icmp_echo_请求() {
+        let packet = build_icmp_echo_request([10, 99, 99, 2], [10, 98, 0, 5], 1, 1);
+        assert!(is_system_echo_request(&packet, TEST_VIP, TEST_PING_TARGET));
+        assert!(!is_system_echo_request(&packet, TEST_VIP, "10.98.0.6"));
+
+        let mut reply = packet.clone();
+        reply[20] = 0;
+        assert!(!is_system_echo_request(&reply, TEST_VIP, TEST_PING_TARGET));
+
+        let injected = build_icmp_echo_request(ECHO_SOURCE, ECHO_TARGET, 1, 1);
+        assert!(!is_system_echo_request(
+            &injected,
+            TEST_VIP,
+            TEST_PING_TARGET
+        ));
     }
 
     #[test]

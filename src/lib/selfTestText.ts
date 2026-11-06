@@ -50,12 +50,17 @@ const DETAIL_EN: Array<[RegExp, string]> = [
     "Injected a $1-byte ICMP request into the adapter ($2 → $3)"],
   [/^写入失败，网卡会话不可用$/, "Write failed; the adapter session is unavailable"],
   [/^读循环提前结束$/, "The read loop ended early"],
-  [/^3 秒内未收到系统回包；请检查测试路由是否生效、网卡读路径是否可用$/,
-    "No system reply was received within 3 seconds; check that the test route is active and the adapter read path works"],
+  [/^3 秒内未收到系统发往网卡的 ICMP 请求；请检查测试路由是否生效、网卡读路径是否可用$/,
+    "No ICMP request from the system to the adapter was received within 3 seconds; check that the test route is active and the adapter read path works"],
   [/^ping (.+) 成功，系统已把包交给网卡$/,
     "ping $1 succeeded; the system delivered packets to the adapter"],
-  [/^ping (.+) 未通（同网段无对端属正常，不影响真实连接）$/,
-    "ping $1 failed (normal when no peer exists on the same subnet; real connections are unaffected)"],
+  [/^ping (.+) 未通（测试目标无对端，未收到回包属正常）$/,
+    "ping $1 failed (the test target has no peer, so no reply is expected)"],
+  [/^未发现同前缀路由$/, "No same-prefix route was found"],
+  [/^(.+)\/(.+) 已被 (.+)（(.+)）占用；请先在诊断页清理 utun 残留或退出其他 VPN$/,
+    "$1/$2 is already owned by $3 ($4); clean up utun residue on the Diagnostics page or quit the other VPN first"],
+  [/^已跳过；处理冲突后重新运行自检$/,
+    "Skipped; resolve the conflict and run the self-test again"],
   [/^网卡 (.+)$/, "Adapter $1"],
   [/^空报文$/, "Empty packet"],
   [/^IPv6 报文（(\d+) 字节）$/, "IPv6 packet ($1 bytes)"],
@@ -67,6 +72,10 @@ export function localizeSelfTestDetail(detail: string): string {
   if (currentLanguage() === "zh") return detail;
   const reply = detail.match(/^收到系统回包：(.+)$/);
   if (reply) return `System reply received: ${localizeSelfTestDetail(reply[1])}`;
+  const request = detail.match(/^收到系统发往网卡的 ICMP 请求：(.+)$/);
+  if (request) {
+    return `Received an ICMP request from the system to the adapter: ${localizeSelfTestDetail(request[1])}`;
+  }
   const retry = detail.match(
     /^(.+)；请退出其他 TopSAP 实例，或执行 sudo ip link del topsap0 后重试$/,
   );

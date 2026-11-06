@@ -34,10 +34,17 @@ describe("localizeSelfTestDetail", () => {
     ).toBe("Injected a 44-byte ICMP request into the adapter (10.98.0.5 → 10.99.99.2)");
     expect(
       localizeSelfTestDetail(
-        "3 秒内未收到系统回包；请检查测试路由是否生效、网卡读路径是否可用",
+        "收到系统发往网卡的 ICMP 请求：IPv4 10.99.99.2 -> 10.98.0.5 proto=1 len=44",
       ),
     ).toBe(
-      "No system reply was received within 3 seconds; check that the test route is active and the adapter read path works",
+      "Received an ICMP request from the system to the adapter: IPv4 10.99.99.2 -> 10.98.0.5 proto=1 len=44",
+    );
+    expect(
+      localizeSelfTestDetail(
+        "3 秒内未收到系统发往网卡的 ICMP 请求；请检查测试路由是否生效、网卡读路径是否可用",
+      ),
+    ).toBe(
+      "No ICMP request from the system to the adapter was received within 3 seconds; check that the test route is active and the adapter read path works",
     );
     expect(localizeSelfTestDetail("执行超时（60 秒）")).toBe(
       "Timed out after 60 seconds",
@@ -71,6 +78,22 @@ describe("localizeSelfTestDetail", () => {
       ),
     ).toBe(
       "Not running as root; the TUN interface cannot be created. Start the app from a terminal with sudo /usr/bin/topsap-client.",
+    );
+  });
+
+  it("翻译测试路由冲突与后续测试", () => {
+    expect(localizeSelfTestDetail("未发现同前缀路由")).toBe(
+      "No same-prefix route was found",
+    );
+    expect(
+      localizeSelfTestDetail(
+        "10.98.0.0/255.255.0.0 已被 utun8（172.21.8.107）占用；请先在诊断页清理 utun 残留或退出其他 VPN",
+      ),
+    ).toBe(
+      "10.98.0.0/255.255.0.0 is already owned by utun8 (172.21.8.107); clean up utun residue on the Diagnostics page or quit the other VPN first",
+    );
+    expect(localizeSelfTestDetail("已跳过；处理冲突后重新运行自检")).toBe(
+      "Skipped; resolve the conflict and run the self-test again",
     );
   });
 
