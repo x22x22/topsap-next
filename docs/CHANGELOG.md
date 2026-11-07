@@ -18,6 +18,7 @@
 
 ### 修复
 
+- 兜底日志跨平台补齐：Unix `NetConfig` 增加 `notes` / `take_notes`，修复 macOS / Linux 因缺少该方法导致的编译失败；macOS 路由 `-interface` 回退与 DNS Router 回退写入运行日志；Linux 无命令级兜底
 - Windows 资源路由：`CreateIpForwardEntry` 的 Metric1 改为 **接口 Metric + 路由分量 1**（动态读取 `netsh ... show interfaces` 的 `Met`），修复 Metric 低于接口 Metric 时返回 `ERROR_BAD_ARGUMENTS(160)`、导致全部路由回退 `route add` 的问题；`route add` 兜底使用路由分量 1，两条路径的有效跃点一致；兜底日志附带 `CreateIpForwardEntry` 返回码
 - Windows IPv4 属性窗口：IPHLPAPI 写入地址后补写网卡静态配置（`EnableDHCP=0`、`IPAddress`、`SubnetMask`），修复「详细信息」有地址但 TCP/IPv4 属性页 IP 与掩码为空的问题，与官方客户端 `netsh ... static` 行为一致
 - Windows 连接性能：Win10/11 网卡地址配置改为 IPHLPAPI `GetUnicastIpAddressTable` / `CreateUnicastIpAddressEntry` 直接写入并回读，避免 `netsh`「返回成功但地址未生效」；仅 API 失败时回退 `netsh`，兜底按 20 秒总时长轮询（第 6 秒仍无地址时重试一次 `delete+add`），修复 v1.3.3 因 6 秒短窗口导致的「设置网卡地址失败（当前：无地址）」随机失败；资源路由改用 IPHLPAPI `CreateIpForwardEntry` / `GetIpForwardTable` / `DeleteIpForwardEntry`，NextHop 为虚拟网关 VIP-1，Metric 保持 1，移除批量 `cmd` / `New-NetRoute` 进程调用；API 失败时回退单条 `route add`；旁路路由一次 `route print` 同时读取活动路由与默认网关。Windows 7 配址保持原有 `netsh` 路径，资源路由同样优先 IPHLPAPI、失败回退 `route add`

@@ -42,6 +42,7 @@ enum LedgerEntry {
 pub struct NetConfig {
     ifname: String,
     ledger: Vec<LedgerEntry>,
+    notes: Vec<String>,
     #[cfg(target_os = "macos")]
     vip: Option<String>,
     #[cfg(target_os = "macos")]
@@ -53,11 +54,17 @@ impl NetConfig {
         Self {
             ifname: alias.into(),
             ledger: Vec::new(),
+            notes: Vec::new(),
             #[cfg(target_os = "macos")]
             vip: None,
             #[cfg(target_os = "macos")]
             peer: None,
         }
+    }
+
+    /// 取出本次配置过程中产生的兜底说明，供连接日志逐条记录
+    pub fn take_notes(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.notes)
     }
 
     pub fn if_index(&self) -> Option<u32> {
@@ -200,6 +207,8 @@ impl NetConfig {
             #[cfg(target_os = "linux")]
             let out = shell::run("ip", &["route", "add", &target, "dev", &self.ifname]).await;
             #[cfg(target_os = "macos")]
+            let used_interface_fallback = self.peer.is_none();
+            #[cfg(target_os = "macos")]
             let gateway = self.peer.as_deref().or(self.vip.as_deref());
             #[cfg(target_os = "macos")]
             let out = match gateway {
@@ -242,6 +251,12 @@ impl NetConfig {
             let installed = out.ok && self.has_route(&route.dest, route.prefix).await;
 
             if installed {
+                #[cfg(target_os = "macos")]
+                if used_interface_fallback {
+                    self.notes.push(format!(
+                        "路由注入：{target} 没有对端地址，回退 -interface 写入"
+                    ));
+                }
                 self.ledger.push(LedgerEntry::Route {
                     dest: route.dest.clone(),
                     mask: route.mask.clone(),
@@ -303,7 +318,7 @@ impl NetConfig {
     /// 组装「VPN DNS + 原 DNS」；原 DNS 为自动获取时从系统解析器或路由器补全
     #[cfg(target_os = "macos")]
     async fn macos_dns_plan(
-        &self,
+        &mut self,
         dns1: &str,
         dns2: &str,
     ) -> Option<(String, Vec<String>, Vec<String>)> {
@@ -333,7 +348,7 @@ impl NetConfig {
 
     /// 读取自动获取的原 DNS；仅 IPv4 会写入网络服务，IPv6 保留在系统原配置中
     #[cfg(target_os = "macos")]
-    async fn system_dns(&self, service: &str) -> Vec<String> {
+    async fn system_dns(&mut self, service: &str) -> Vec<String> {
         let out = shell::run("scutil", &["--dns"]).await;
         let mut servers = if out.ok {
             parse_scutil_dns(&out.stdout, &self.ifname)
@@ -345,6 +360,8 @@ impl NetConfig {
             if info.ok {
                 if let Some(router) = parse_router_info(&info.stdout) {
                     servers.push(router);
+                    self.notes
+                        .push("DNS：原 DNS 为自动获取，scutil 无结果，回退 Router".to_string());
                 }
             }
         }

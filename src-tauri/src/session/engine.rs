@@ -1073,6 +1073,9 @@ impl Engine {
         }
 
         let dns_ok = net.set_dns(&session.dns1, &session.dns2).await;
+        for note in net.take_notes() {
+            self.log(note);
+        }
         // 原客户端不修改系统 hosts；dns_info 仅解析保留，不写系统文件
         let dns_servers = if session.dns2.is_empty() {
             session.dns1.clone()
