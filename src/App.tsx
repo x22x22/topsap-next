@@ -11,6 +11,7 @@ import { SmsDialog } from "./components/SmsDialog";
 import { useConnect, useDisconnect, submitCaptcha, submitSms } from "./hooks/useConnection";
 import { useEngineEvents } from "./hooks/useEngineEvents";
 import { api } from "./lib/api";
+import { localizeError } from "./lib/errorText";
 import { firstLine } from "./lib/format";
 import { applyTheme } from "./lib/theme";
 import { useI18n } from "./lib/i18n";
@@ -22,6 +23,7 @@ import type {
   LoginForm,
   SessionSummary,
   ThemeMode,
+  UpdateProgress,
 } from "./types/engine";
 
 export default function App() {
@@ -33,6 +35,9 @@ export default function App() {
   const [importNoticeOpen, setImportNoticeOpen] = useState(true);
   const [updateOpen, setUpdateOpen] = useState(false);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [updating, setUpdating] = useState(false);
+  const [updateProgress, setUpdateProgress] = useState<UpdateProgress | null>(null);
+  const [updateError, setUpdateError] = useState<string | null>(null);
   const [routeDeciding, setRouteDeciding] = useState(false);
   const [summary, setSummary] = useState<SessionSummary | null>(null);
   const [resolvedTheme, setResolvedTheme] = useState<"dark" | "light">("dark");
@@ -72,6 +77,48 @@ export default function App() {
     connectionsQuery.data.connections.length === 0 &&
     !settingsQuery.data.gateway.trim();
   const needsImportNotice = noConnectionConfig && importNoticeOpen && !needsRootNotice;
+  const canAutoUpdate =
+    appInfo?.platform === "windows" || appInfo?.platform === "macos";
+
+  const handleAutoUpdate = async () => {
+    if (!updateInfo || updating) return;
+    setUpdating(true);
+    setUpdateError(null);
+    setUpdateProgress({ stage: "downloading", downloaded: 0, total: 0 });
+    try {
+      await api.startUpdate((progress) => setUpdateProgress(progress));
+    } catch (error) {
+      setUpdating(false);
+      setUpdateError(localizeError(firstLine(String(error))));
+    }
+  };
+
+  const updateStageText = (() => {
+    if (!updateProgress) return "";
+    switch (updateProgress.stage) {
+      case "downloading": {
+        if (updateProgress.total > 0) {
+          const percent = Math.min(
+            100,
+            Math.round((updateProgress.downloaded / updateProgress.total) * 100),
+          );
+          return t("正在下载更新包 {percent}%", { percent });
+        }
+        const size = (updateProgress.downloaded / 1024 / 1024).toFixed(1);
+        return t("正在下载更新包（已下载 {size} MB）", { size });
+      }
+      case "verifying":
+        return t("正在校验更新包");
+      case "disconnecting":
+        return t("正在断开连接");
+      case "installing":
+        return t("正在安装并重启");
+      case "restarting":
+        return t("即将重启客户端");
+      default:
+        return t("正在更新");
+    }
+  })();
 
   const toggleCollapsed = useCallback(() => {
     setCollapsed((prev) => {
@@ -329,14 +376,30 @@ export default function App() {
               })
             : undefined
         }
-        onClose={() => setUpdateOpen(false)}
+        onClose={() => {
+          if (!updating) setUpdateOpen(false);
+        }}
         footer={
           <>
-            <Button variant="ghost" onClick={() => setUpdateOpen(false)}>
+            <Button
+              variant="ghost"
+              onClick={() => setUpdateOpen(false)}
+              disabled={updating}
+            >
               {t("稍后")}
             </Button>
+            {canAutoUpdate ? (
+              <Button
+                variant="primary"
+                onClick={() => void handleAutoUpdate()}
+                disabled={updating}
+              >
+                {updating ? t("正在更新") : t("自动更新")}
+              </Button>
+            ) : null}
             <Button
-              variant="primary"
+              variant={canAutoUpdate ? "ghost" : "primary"}
+              disabled={updating}
               onClick={() => {
                 if (!updateInfo) return;
                 void api.openUrl(updateInfo.url).then(
@@ -351,8 +414,18 @@ export default function App() {
         }
       >
         <p className="text-xs leading-relaxed text-muted">
-          {t("建议更新到最新版本以获取修复与改进。请先点击「前往」打开下载页面，完整退出当前程序后再安装更新。")}
+          {t(
+            canAutoUpdate
+              ? "建议更新到最新版本以获取修复与改进。自动更新会先断开当前 VPN 连接，然后下载、安装并重启客户端；若手动下载，请先点击「前往」打开下载页面，再完整退出当前程序后安装。"
+              : "建议更新到最新版本以获取修复与改进。请先点击「前往」打开下载页面，再完整退出当前程序后安装更新。",
+          )}
         </p>
+        {updating && updateProgress ? (
+          <p className="mt-3 text-xs font-medium text-accent">{updateStageText}</p>
+        ) : null}
+        {updateError ? (
+          <p className="mt-3 text-xs leading-relaxed text-danger">{updateError}</p>
+        ) : null}
       </Modal>
 
       <Toaster

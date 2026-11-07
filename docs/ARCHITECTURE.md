@@ -218,7 +218,7 @@ TopSAP-Next/
 │       ├── privileged.rs        # macOS helper 客户端与 LaunchDaemon 安装
 │       ├── session_guard.rs     # 异常退出会话标记与下次启动补注销
 │       ├── shutdown.rs          # 系统关机/终止信号下的限时断开
-│       ├── update.rs            # 发布目录版本检查与版本比较
+│       ├── update/{mod,download,install}.rs # 版本检查、更新下载与多平台安装
 │       ├── auth/{mod,client,error,http,json,model}.rs
 │       ├── protocol/{mod,frame,parser}.rs
 │       ├── tunnel/mod.rs

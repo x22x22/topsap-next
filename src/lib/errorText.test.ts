@@ -148,6 +148,34 @@ describe("localizeError", () => {
     );
   });
 
+  it("翻译自动更新错误", () => {
+    expect(localizeError("当前已是最新版本")).toBe("You're already up to date");
+    expect(localizeError("下载到的文件不是有效的 ZIP 更新包")).toBe(
+      "The downloaded file is not a valid ZIP update package.",
+    );
+    expect(localizeError("更新包缺少 resources/wintun.dll")).toBe(
+      "The update package is missing resources/wintun.dll.",
+    );
+    expect(localizeError("管理员授权未完成：用户已取消")).toBe(
+      "Administrator authorization was not completed: 用户已取消",
+    );
+    expect(localizeError("更新前断开连接失败：timeout")).toBe(
+      "Failed to disconnect before updating: timeout",
+    );
+    expect(localizeError("版本文件内容无法识别")).toBe(
+      "The version file content could not be recognized.",
+    );
+    expect(localizeError("下载到的文件为空")).toBe(
+      "The downloaded update package is empty.",
+    );
+    expect(localizeError("更新包落盘失败：磁盘已满")).toBe(
+      "Failed to save the update package: 磁盘已满",
+    );
+    expect(localizeError("未定位到当前应用包")).toBe(
+      "The current application bundle could not be located.",
+    );
+  });
+
   it("未匹配的文案保持原样", () => {
     expect(localizeError("未知的新错误")).toBe("未知的新错误");
   });

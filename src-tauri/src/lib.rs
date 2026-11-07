@@ -63,6 +63,7 @@ pub fn run() {
         .setup(|app| {
             // 配置窗口 create=false，这里统一创建；Windows 可指定便携 WebView 数据目录
             ensure_user_dirs(app.handle())?;
+            crate::update::cleanup_temp();
             create_main_window(app.handle())?;
             let dll_path = resolve_dll(app.handle())?;
             let engine = Engine::new(app.handle().clone(), dll_path.clone());
@@ -93,6 +94,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::app::app_info,
             commands::app::check_update,
+            commands::update::start_update,
             commands::app::open_log_dir,
             commands::app::open_url,
             commands::conn::connect,

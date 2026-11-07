@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, Channel } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type {
@@ -18,6 +18,7 @@ import type {
   SessionSummary,
   Stats,
   UpdateCheck,
+  UpdateProgress,
   UtunCleanupResult,
 } from "../types/engine";
 import { isMockMode, mockInvoke, mockListen } from "./mock";
@@ -29,6 +30,14 @@ const call = <T>(cmd: string, args?: Record<string, unknown>): Promise<T> =>
 export const api = {
   appInfo: () => call<AppInfo>("app_info"),
   checkUpdate: () => call<UpdateCheck>("check_update"),
+  startUpdate: (onProgress: (progress: UpdateProgress) => void) => {
+    if (isMockMode()) {
+      return Promise.reject(new Error("浏览器预览不支持自动更新"));
+    }
+    const channel = new Channel<UpdateProgress>();
+    channel.onmessage = onProgress;
+    return call<void>("start_update", { onProgress: channel });
+  },
   openUrl: (url: string) => call<void>("open_url", { url }),
 
   connect: (form: LoginForm) => call<SessionSummary>("connect", { form }),

@@ -376,8 +376,19 @@ const EN: Record<string, string> = {
   "可更新": "Update",
   "发现新版本": "New version available",
   "当前版本 v{current}，最新版本 v{latest}": "Current version v{current}, latest v{latest}",
-  "建议更新到最新版本以获取修复与改进。请先点击「前往」打开下载页面，完整退出当前程序后再安装更新。":
-    "Update to the latest version for fixes and improvements. Click Download to open the download page first, then fully quit the current app before installing the update.",
+  "建议更新到最新版本以获取修复与改进。请先点击「前往」打开下载页面，再完整退出当前程序后安装更新。":
+    "Update to the latest version for fixes and improvements. Click Download to open the download page first, then fully quit the app before installing the update.",
+  "建议更新到最新版本以获取修复与改进。自动更新会先断开当前 VPN 连接，然后下载、安装并重启客户端；若手动下载，请先点击「前往」打开下载页面，再完整退出当前程序后安装。":
+    "Update to the latest version for fixes and improvements. Auto update disconnects the current VPN session, then downloads, installs, and restarts the app. If you download manually, click Download to open the download page first, then fully quit the app before installing.",
+  "自动更新": "Update now",
+  "正在更新": "Updating",
+  "正在下载更新包 {percent}%": "Downloading update {percent}%",
+  "正在下载更新包（已下载 {size} MB）": "Downloading update ({size} MB)",
+  "正在校验更新包": "Verifying update package",
+  "正在断开连接": "Disconnecting",
+  "正在安装并重启": "Installing and restarting",
+  "即将重启客户端": "Restarting the app",
+  "浏览器预览不支持自动更新": "Auto update is not available in browser preview.",
   "前往": "Download",
   "无法打开下载页面": "Unable to open the download page",
   "检查更新": "Check for updates",

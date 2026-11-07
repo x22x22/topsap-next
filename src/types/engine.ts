@@ -32,6 +32,12 @@ export interface UpdateCheck {
   checked: boolean;
 }
 
+export interface UpdateProgress {
+  stage: string;
+  downloaded: number;
+  total: number;
+}
+
 export interface LoginForm {
   gateway: string;
   port?: number;

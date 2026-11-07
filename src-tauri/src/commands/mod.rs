@@ -8,3 +8,4 @@ pub mod conn;
 pub mod diag;
 pub mod profiles;
 pub mod settings;
+pub mod update;
