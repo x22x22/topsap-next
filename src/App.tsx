@@ -398,7 +398,7 @@ export default function App() {
               </Button>
             ) : null}
             <Button
-              variant={canAutoUpdate ? "ghost" : "primary"}
+              variant={canAutoUpdate ? "outline" : "primary"}
               disabled={updating}
               onClick={() => {
                 if (!updateInfo) return;

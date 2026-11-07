@@ -125,6 +125,7 @@ fn apply_windows(staged: &Path) -> Result<(), String> {
          $exe = Join-Path $target 'topsap-client.exe'\n\
          $res = Join-Path $target 'resources'\n\
          $log = {log}\n\
+         $tempDir = Split-Path $staging -Parent\n\
          try {{\n\
            while (Get-Process -Id $parentPid -ErrorAction SilentlyContinue) {{ Start-Sleep -Seconds 1 }}\n\
            if (Test-Path $backup) {{ Remove-Item $backup -Recurse -Force }}\n\
@@ -143,7 +144,8 @@ fn apply_windows(staged: &Path) -> Result<(), String> {
            exit\n\
          }}\n\
          Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue\n\
-         Remove-Item $backup -Recurse -Force -ErrorAction SilentlyContinue\n",
+         Remove-Item $backup -Recurse -Force -ErrorAction SilentlyContinue\n\
+         Start-Process -WindowStyle Hidden -FilePath $env:ComSpec -ArgumentList '/c', \"ping 127.0.0.1 -n 3 >nul & rmdir /s /q `\"$tempDir`\"\" -ErrorAction SilentlyContinue\n",
         pid = std::process::id(),
         target = ps_quote(target),
         staging = ps_quote(staged),
@@ -271,6 +273,7 @@ async fn apply_macos(staged: &Path) -> Result<(), String> {
          user={user}\n\
          uid={uid}\n\
          log={log}\n\
+         tmpdir={tmpdir}\n\
          open_app() {{\n\
            if [ \"$(id -u)\" = \"0\" ]; then\n\
              launchctl asuser \"$uid\" open \"$target\" || open \"$target\"\n\
@@ -291,14 +294,21 @@ async fn apply_macos(staged: &Path) -> Result<(), String> {
          fi\n\
          xattr -rd com.apple.quarantine \"$target\" 2>/dev/null || true\n\
          if [ \"$(id -u)\" = \"0\" ]; then chown -R \"$user\" \"$target\" 2>/dev/null || true; fi\n\
-         open_app\n\
-         rm -rf \"$backup\" \"$staged\"\n",
+         if open_app; then\n\
+           rm -rf \"$backup\" \"$staged\" \"$tmpdir\"\n\
+         else\n\
+           echo \"open new app failed\" >> \"$log\"\n\
+           rm -rf \"$target\"\n\
+           mv \"$backup\" \"$target\"\n\
+           open_app\n\
+         fi\n",
         pid = std::process::id(),
         target = sh_quote(&bundle_text),
         staged = sh_quote(&staged.to_string_lossy()),
         user = sh_quote(&user),
         uid = uid,
         log = sh_quote(&log.to_string_lossy()),
+        tmpdir = sh_quote(&dir.to_string_lossy()),
     );
     std::fs::write(&helper, body).map_err(|err| format!("写入更新脚本失败：{err}"))?;
     set_executable(&helper)?;

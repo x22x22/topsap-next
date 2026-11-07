@@ -324,7 +324,7 @@ TLS 建连（不校验证书、不发 SNI）
 | `netcfg` | 网卡地址、路由注入/回读、DNS、旧版 hosts 残留清理 | `NetConfig`, `RouteEntry`, `CleanupLedger` |
 | `session` | 生命周期编排、事件广播、自动重连 | `Engine`, `EngineState`, `EngineEvent` |
 | `platform` | 运行环境探测，区分 Windows 7 与较新系统 | `is_windows7()` |
-| `update` | 读取发布目录中的纯文本版本号并与当前版本比较 | `UpdateInfo`, `check()` |
+| `update` | 版本检查、流式下载、Windows/macOS 安装编排与更新临时目录清理 | `UpdateInfo`, `UpdateProgress`, `check()` |
 | `settings` | 应用设置读写与校验 | `AppSettings` |
 | `proxy_bypass` | Windows / macOS / Linux 系统代理绕过列表同步；macOS 经 helper 执行 `networksetup` | `ProxyBypassStatus` |
 | `secret_store` | 跨平台 keyring（Windows 凭据管理器 / macOS 钥匙串 / Linux Secret Service）+ AES-GCM 回退 | `SecretStore` |
