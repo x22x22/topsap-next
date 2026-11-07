@@ -370,7 +370,7 @@ impl NetConfig {
 
     /// 找到当前默认路由对应的网络服务（Wi-Fi / Ethernet 等）
     #[cfg(target_os = "macos")]
-    async fn active_service(&self) -> Option<String> {
+    async fn active_service(&mut self) -> Option<String> {
         let default_if = self.default_interface().await;
         let out = shell::run("networksetup", &["-listnetworkserviceorder"]).await;
         if out.ok {
@@ -383,6 +383,8 @@ impl NetConfig {
         for candidate in ["Wi-Fi", "Ethernet"] {
             let out = shell::run("networksetup", &["-getinfo", candidate]).await;
             if out.ok {
+                self.notes
+                    .push(format!("DNS：未找到默认网络服务，回退 {candidate}"));
                 return Some(candidate.to_string());
             }
         }
@@ -410,7 +412,12 @@ impl NetConfig {
     }
 
     pub async fn cleanup(&mut self) {
-        for entry in self.ledger.drain(..).rev() {
+        #[cfg(target_os = "macos")]
+        let mut route_fallbacks = 0usize;
+        let mut residual: Vec<String> = Vec::new();
+        let entries: Vec<LedgerEntry> = self.ledger.drain(..).rev().collect();
+
+        for entry in entries {
             match entry {
                 LedgerEntry::Route {
                     dest,
@@ -427,6 +434,9 @@ impl NetConfig {
                         let target = format!("{dest}/{prefix}");
                         let _ =
                             shell::run("ip", &["route", "del", &target, "dev", &self.ifname]).await;
+                        if self.has_route(&dest, prefix).await {
+                            residual.push(target);
+                        }
                     }
                     #[cfg(target_os = "macos")]
                     {
@@ -445,6 +455,8 @@ impl NetConfig {
                         )
                         .await;
                         if macos_route_exists(&self.ifname, &dest, prefix).await {
+                            route_fallbacks += 1;
+                            let mut removed = false;
                             for gateway in [self.peer.as_deref(), self.vip.as_deref()]
                                 .into_iter()
                                 .flatten()
@@ -455,17 +467,31 @@ impl NetConfig {
                                 )
                                 .await;
                                 if !macos_route_exists(&self.ifname, &dest, prefix).await {
+                                    removed = true;
                                     break;
                                 }
+                            }
+                            if !removed {
+                                residual.push(format!("{dest}/{prefix}"));
                             }
                         }
                     }
                 }
                 LedgerEntry::Bypass { ip } => {
                     #[cfg(target_os = "linux")]
-                    let _ = shell::run("ip", &["route", "del", &format!("{ip}/32")]).await;
+                    {
+                        let _ = shell::run("ip", &["route", "del", &format!("{ip}/32")]).await;
+                        if self.has_route(&ip, 32).await {
+                            residual.push(format!("{ip}/32"));
+                        }
+                    }
                     #[cfg(target_os = "macos")]
-                    let _ = shell::run("route", &["-n", "delete", "-host", &ip]).await;
+                    {
+                        let _ = shell::run("route", &["-n", "delete", "-host", &ip]).await;
+                        if macos_host_route_exists(&ip).await {
+                            residual.push(format!("{ip}/32"));
+                        }
+                    }
                 }
                 #[cfg(target_os = "macos")]
                 LedgerEntry::Dns { service, original } => {
@@ -475,9 +501,33 @@ impl NetConfig {
                     } else {
                         args.extend(original.iter().map(String::as_str));
                     }
-                    let _ = shell::run("networksetup", &args).await;
+                    let out = shell::run("networksetup", &args).await;
+                    if !out.ok {
+                        self.notes.push(format!("DNS 恢复失败：{service}"));
+                    }
                 }
             }
+        }
+
+        #[cfg(target_os = "macos")]
+        if route_fallbacks > 0 {
+            self.notes.push(format!(
+                "路由清理：{route_fallbacks} 条接口删除失败，回退网关删除"
+            ));
+        }
+
+        if !residual.is_empty() {
+            let examples = residual
+                .iter()
+                .take(5)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("、");
+            self.notes.push(format!(
+                "路由清理失败：{} 条残留（{}）",
+                residual.len(),
+                examples
+            ));
         }
     }
 
@@ -739,6 +789,16 @@ async fn macos_route_exists(ifname: &str, dest: &str, prefix: u8) -> bool {
         }
     }
     false
+}
+
+#[cfg(target_os = "macos")]
+async fn macos_host_route_exists(ip: &str) -> bool {
+    let out = shell::run("route", &["-n", "get", ip]).await;
+    out.ok
+        && out
+            .stdout
+            .lines()
+            .any(|line| line.trim().starts_with("flags:") && line.contains('H'))
 }
 
 /// 解析 Linux `ip addr` 或 macOS `ifconfig` 输出中的 IPv4 地址。

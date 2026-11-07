@@ -19,9 +19,10 @@
 ### 修复
 
 - 兜底日志跨平台补齐：Unix `NetConfig` 增加 `notes` / `take_notes`，修复 macOS / Linux 因缺少该方法导致的编译失败；macOS 路由 `-interface` 回退与 DNS Router 回退写入运行日志；Linux 无命令级兜底
+- 兜底日志补充：三平台断开清理记录路由/DNS 回退与残留（Windows 清理后回读路由表，macOS 记录接口删除→网关回退与 DNS 恢复失败，Linux 删除后回读）；macOS 记录默认网络服务缺失时的 Wi-Fi/Ethernet 回退；Windows 记录 MTU 设置失败；清理失败时断开提示改为「已断开（部分网络配置未恢复，详见上方日志）」
 - Windows 资源路由：`CreateIpForwardEntry` 的 Metric1 改为 **接口 Metric + 路由分量 1**（动态读取 `netsh ... show interfaces` 的 `Met`），修复 Metric 低于接口 Metric 时返回 `ERROR_BAD_ARGUMENTS(160)`、导致全部路由回退 `route add` 的问题；`route add` 兜底使用路由分量 1，两条路径的有效跃点一致；兜底日志附带 `CreateIpForwardEntry` 返回码
 - Windows IPv4 属性窗口：IPHLPAPI 写入地址后补写网卡静态配置（`EnableDHCP=0`、`IPAddress`、`SubnetMask`），修复「详细信息」有地址但 TCP/IPv4 属性页 IP 与掩码为空的问题，与官方客户端 `netsh ... static` 行为一致
-- Windows 连接性能：Win10/11 网卡地址配置改为 IPHLPAPI `GetUnicastIpAddressTable` / `CreateUnicastIpAddressEntry` 直接写入并回读，避免 `netsh`「返回成功但地址未生效」；仅 API 失败时回退 `netsh`，兜底按 20 秒总时长轮询（第 6 秒仍无地址时重试一次 `delete+add`），修复 v1.3.3 因 6 秒短窗口导致的「设置网卡地址失败（当前：无地址）」随机失败；资源路由改用 IPHLPAPI `CreateIpForwardEntry` / `GetIpForwardTable` / `DeleteIpForwardEntry`，NextHop 为虚拟网关 VIP-1，Metric 保持 1，移除批量 `cmd` / `New-NetRoute` 进程调用；API 失败时回退单条 `route add`；旁路路由一次 `route print` 同时读取活动路由与默认网关。Windows 7 配址保持原有 `netsh` 路径，资源路由同样优先 IPHLPAPI、失败回退 `route add`
+- Windows 连接性能：Win10/11 网卡地址配置改为 IPHLPAPI `GetUnicastIpAddressTable` / `CreateUnicastIpAddressEntry` 直接写入并回读，避免 `netsh`「返回成功但地址未生效」；仅 API 失败时回退 `netsh`，兜底按 20 秒总时长轮询（第 6 秒仍无地址时重试一次 `delete+add`），修复 v1.3.3 因 6 秒短窗口导致的「设置网卡地址失败（当前：无地址）」随机失败；资源路由改用 IPHLPAPI `CreateIpForwardEntry` / `GetIpForwardTable` / `DeleteIpForwardEntry`，NextHop 为虚拟网关 VIP-1，Metric 为接口 Metric + 1，移除批量 `cmd` / `New-NetRoute` 进程调用；API 失败时回退单条 `route add`；旁路路由一次 `route print` 同时读取活动路由与默认网关。Windows 7 配址保持原有 `netsh` 路径，资源路由同样优先 IPHLPAPI、失败回退 `route add`
 - 异常退出补偿：会话标记额外记录 macOS utun 名称与 VIP；下次启动/连接前仅当接口地址与记录一致时关闭该 utun 并清理关联路由，避免误伤同名接口
 - 网卡自检：注入测试路由前先检查同前缀路由冲突，发现被其他接口占用时直接给出冲突接口并跳过后续测试；macOS 接收方向改为由系统 `ping` 主动向测试目标发包、读循环读回该 ICMP 请求，直接验证真实路由与读路径；Windows / Linux 保持原有「注入报文并等待系统回包」验证方式
 - macOS 数据面：utun 的对端地址与资源路由下一跳改为 **VIP-1**（与官方客户端 `inet VIP --> VIP-1` 一致），修复把本机 VIP 同时当作对端时 `route get` 回读通过、但系统流量不进入 utun 的问题，自检「接收方向」随之恢复；`HELPER_VERSION` 升至 `1.2.4`

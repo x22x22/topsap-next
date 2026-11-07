@@ -1029,6 +1029,9 @@ impl Engine {
             }
             self.log(format!("配置网卡失败：{err}"));
             net.cleanup().await;
+            for note in net.take_notes() {
+                self.log(note);
+            }
             return Err(err.to_string());
         }
         for note in net.take_notes() {
@@ -1050,6 +1053,9 @@ impl Engine {
             Ok(tunnel) => tunnel,
             Err(err) => {
                 net.cleanup().await;
+                for note in net.take_notes() {
+                    self.log(note);
+                }
                 return Err(err.to_string());
             }
         };
@@ -1069,6 +1075,9 @@ impl Engine {
         }
         if !session.routes.is_empty() && report.ok == 0 {
             net.cleanup().await;
+            for note in net.take_notes() {
+                self.log(note);
+            }
             return Err("路由注入全部失败，内网流量无法进入隧道".to_string());
         }
 
@@ -1170,13 +1179,17 @@ impl Engine {
         }
 
         self.set_phase(Phase::Disconnecting, "正在断开");
-        self.teardown().await;
+        let cleanup_ok = self.teardown().await;
         self.set_phase(Phase::Idle, "");
-        self.log("已断开并恢复网络配置");
+        if cleanup_ok {
+            self.log("已断开并恢复网络配置");
+        } else {
+            self.log("已断开（部分网络配置未恢复，详见上方日志）");
+        }
         Ok(())
     }
 
-    async fn teardown(self: &Arc<Self>) {
+    async fn teardown(self: &Arc<Self>) -> bool {
         let (tunnel, net, reader_stop, reader, tunnel_task, stats_task, session) = {
             let mut inner = self.lock();
             inner.user_disconnect = true;
@@ -1235,9 +1248,20 @@ impl Engine {
         let cleanup = async move {
             if let Some(mut net) = net {
                 net.cleanup().await;
+                net.take_notes()
+            } else {
+                Vec::new()
             }
         };
-        tokio::join!(logout, cleanup);
+        let (_, cleanup_notes) = tokio::join!(logout, cleanup);
+        let mut cleanup_ok = true;
+        for note in cleanup_notes {
+            if note.contains("清理失败") || note.contains("恢复失败") || note.contains("状态未知")
+            {
+                cleanup_ok = false;
+            }
+            self.log(note);
+        }
 
         {
             let mut inner = self.lock();
@@ -1252,6 +1276,7 @@ impl Engine {
             inner.session_cookie = None;
             inner.login_user.clear();
         }
+        cleanup_ok
     }
 
     fn on_tunnel_closed(self: &Arc<Self>, reason: String) {

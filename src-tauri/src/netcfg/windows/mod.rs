@@ -294,8 +294,8 @@ impl NetConfig {
         )))
     }
 
-    async fn apply_mtu(&self) {
-        let _ = shell::run(
+    async fn apply_mtu(&mut self) {
+        let out = shell::run(
             "netsh",
             &[
                 "interface",
@@ -308,6 +308,9 @@ impl NetConfig {
             ],
         )
         .await;
+        if !out.ok {
+            self.notes.push("网卡 MTU 设置失败（1400）".to_string());
+        }
     }
 
     /// 给网关 IP 加一条旁路路由，否则隧道连接会自己走进隧道形成环路。
@@ -655,6 +658,9 @@ impl NetConfig {
     pub async fn cleanup(&mut self) {
         let entries: Vec<LedgerEntry> = self.ledger.drain(..).rev().collect();
         let table = ip_forward_table();
+        let mut removed_routes: Vec<(String, String, Ipv4Addr, u32)> = Vec::new();
+        let mut removed_bypass: Vec<String> = Vec::new();
+        let mut fallback_count = 0usize;
 
         for entry in entries {
             match entry {
@@ -684,16 +690,73 @@ impl NetConfig {
                         Err(_) => false,
                     };
                     if !handled {
+                        fallback_count += 1;
                         let if_str = if_index.to_string();
                         let _ =
                             shell::run("route", &["DELETE", &dest, "MASK", &mask, "IF", &if_str])
                                 .await;
                     }
+                    removed_routes.push((dest, mask, next_hop, if_index));
                 }
                 LedgerEntry::Bypass { ip } => {
                     let _ = shell::run("route", &["DELETE", &ip, "MASK", "255.255.255.255"]).await;
+                    removed_bypass.push(ip);
                 }
             }
+        }
+
+        if fallback_count > 0 {
+            self.notes.push(format!(
+                "路由清理：{fallback_count} 条使用 route DELETE 兜底"
+            ));
+        }
+
+        let mut residual: Vec<String> = Vec::new();
+        match ip_forward_table() {
+            Ok(rows) => {
+                for (dest, mask, next_hop, if_index) in &removed_routes {
+                    let (Ok(dest_ip), Ok(mask_ip)) =
+                        (dest.parse::<Ipv4Addr>(), mask.parse::<Ipv4Addr>())
+                    else {
+                        continue;
+                    };
+                    if rows
+                        .iter()
+                        .any(|row| row_matches(row, dest_ip, mask_ip, *next_hop, *if_index))
+                    {
+                        residual.push(format!("{dest}/{mask}"));
+                    }
+                }
+                for ip in &removed_bypass {
+                    let Ok(ip_addr) = ip.parse::<Ipv4Addr>() else {
+                        continue;
+                    };
+                    if rows
+                        .iter()
+                        .any(|row| row.dest == ipv4_dword(ip_addr) && row.mask == u32::MAX)
+                    {
+                        residual.push(format!("{ip}/32"));
+                    }
+                }
+            }
+            Err(_) => {
+                self.notes
+                    .push("路由清理：无法回读路由表，残留状态未知".to_string());
+            }
+        }
+
+        if !residual.is_empty() {
+            let examples = residual
+                .iter()
+                .take(5)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("、");
+            self.notes.push(format!(
+                "路由清理失败：{} 条残留（{}）",
+                residual.len(),
+                examples
+            ));
         }
     }
 
