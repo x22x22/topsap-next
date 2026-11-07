@@ -351,7 +351,7 @@ export default function App() {
         }
       >
         <p className="text-xs leading-relaxed text-muted">
-          {t("建议更新到最新版本以获取修复与改进，点击「前往」打开下载页面。")}
+          {t("建议更新到最新版本以获取修复与改进。请先点击「前往」打开下载页面，完整退出当前程序后再安装更新。")}
         </p>
       </Modal>
 

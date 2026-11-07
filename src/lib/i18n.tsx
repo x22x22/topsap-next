@@ -376,8 +376,8 @@ const EN: Record<string, string> = {
   "可更新": "Update",
   "发现新版本": "New version available",
   "当前版本 v{current}，最新版本 v{latest}": "Current version v{current}, latest v{latest}",
-  "建议更新到最新版本以获取修复与改进，点击「前往」打开下载页面。":
-    "Update to the latest version for fixes and improvements. Click Download to open the download page.",
+  "建议更新到最新版本以获取修复与改进。请先点击「前往」打开下载页面，完整退出当前程序后再安装更新。":
+    "Update to the latest version for fixes and improvements. Click Download to open the download page first, then fully quit the current app before installing the update.",
   "前往": "Download",
   "无法打开下载页面": "Unable to open the download page",
   "检查更新": "Check for updates",
