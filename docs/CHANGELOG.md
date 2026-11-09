@@ -21,6 +21,7 @@
 ### 修复
 
 - 自动重连：上行泵改为每个报文读取当前隧道句柄，修复重连成功后配址/路由仍在但所有流量不通的问题；每条隧道使用独立取消令牌并在替换时关闭旧连接；重连后复核并补配网卡地址、网关旁路、资源路由与 DNS，路由账本去重；增加隧道代际与重连互斥，忽略旧隧道的延迟关闭事件并处理新隧道建立后立即断开的情况；上行发送失败增加限频日志
+- 重连网关 IP 优化：优先复用登录时缓存的网关 IP，直接用该 IP 建立 TLS 与旁路，避免断线后系统 DNS 仍指向 VPN DNS 导致解析长时间等待；缓存 IP 建连失败时再以 3 秒超时重新解析一次，更新旁路与缓存后重试
 - 兜底日志跨平台补齐：Unix `NetConfig` 增加 `notes` / `take_notes`，修复 macOS / Linux 因缺少该方法导致的编译失败；macOS 路由 `-interface` 回退与 DNS Router 回退写入运行日志；Linux 无命令级兜底
 - 兜底日志补充：三平台断开清理记录路由/DNS 回退与残留（Windows 清理后回读路由表，macOS 记录接口删除→网关回退与 DNS 恢复失败，Linux 删除后回读）；macOS 记录默认网络服务缺失时的 Wi-Fi/Ethernet 回退；Windows 记录 MTU 设置失败；清理失败时断开提示改为「已断开（部分网络配置未恢复，详见上方日志）」
 - Windows 资源路由：`CreateIpForwardEntry` 的 Metric1 改为 **接口 Metric + 路由分量 1**（动态读取 `netsh ... show interfaces` 的 `Met`），修复 Metric 低于接口 Metric 时返回 `ERROR_BAD_ARGUMENTS(160)`、导致全部路由回退 `route add` 的问题；`route add` 兜底使用路由分量 1，两条路径的有效跃点一致；兜底日志附带 `CreateIpForwardEntry` 返回码
