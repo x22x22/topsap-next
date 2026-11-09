@@ -168,12 +168,7 @@ impl NetConfig {
 
         for route in list {
             if self.has_route(&route.dest, route.prefix).await {
-                self.ledger.push(LedgerEntry::Route {
-                    dest: route.dest.clone(),
-                    mask: route.mask.clone(),
-                    prefix: route.prefix,
-                    preexisting: true,
-                });
+                self.note_route(route, true);
                 ok += 1;
                 continue;
             }
@@ -257,12 +252,7 @@ impl NetConfig {
                         "路由注入：{target} 没有对端地址，回退 -interface 写入"
                     ));
                 }
-                self.ledger.push(LedgerEntry::Route {
-                    dest: route.dest.clone(),
-                    mask: route.mask.clone(),
-                    prefix: route.prefix,
-                    preexisting: false,
-                });
+                self.note_route(route, false);
                 ok += 1;
             } else {
                 #[cfg(target_os = "macos")]
@@ -288,6 +278,30 @@ impl NetConfig {
         }
     }
 
+    fn note_route(&mut self, route: &RouteEntry, preexisting: bool) {
+        if let Some(LedgerEntry::Route {
+            preexisting: existing,
+            ..
+        }) = self.ledger.iter_mut().find(|entry| {
+            matches!(
+                entry,
+                LedgerEntry::Route { dest, mask, prefix, .. }
+                    if dest == &route.dest && mask == &route.mask && *prefix == route.prefix
+            )
+        }) {
+            if *existing && !preexisting {
+                *existing = false;
+            }
+            return;
+        }
+        self.ledger.push(LedgerEntry::Route {
+            dest: route.dest.clone(),
+            mask: route.mask.clone(),
+            prefix: route.prefix,
+            preexisting,
+        });
+    }
+
     pub async fn set_dns(&mut self, dns1: &str, dns2: &str) -> bool {
         #[cfg(target_os = "macos")]
         {
@@ -298,10 +312,15 @@ impl NetConfig {
             args.extend(servers.iter().map(String::as_str));
             let out = shell::run("networksetup", &args).await;
             if out.ok {
-                self.ledger.push(LedgerEntry::Dns {
-                    service,
-                    original: configured,
+                let recorded = self.ledger.iter().any(|entry| {
+                    matches!(entry, LedgerEntry::Dns { service: recorded, .. } if recorded == &service)
                 });
+                if !recorded {
+                    self.ledger.push(LedgerEntry::Dns {
+                        service,
+                        original: configured,
+                    });
+                }
                 true
             } else {
                 false

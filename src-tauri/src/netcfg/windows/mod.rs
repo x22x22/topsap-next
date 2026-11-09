@@ -533,6 +533,29 @@ impl NetConfig {
         if_index: u32,
         preexisting: bool,
     ) {
+        if let Some(LedgerEntry::Route {
+            preexisting: existing,
+            ..
+        }) = self.ledger.iter_mut().find(|entry| {
+            matches!(
+                entry,
+                LedgerEntry::Route {
+                    dest,
+                    mask,
+                    next_hop: entry_hop,
+                    if_index: entry_index,
+                    ..
+                } if dest == &route.dest
+                    && mask == &route.mask
+                    && *entry_hop == next_hop
+                    && *entry_index == if_index
+            )
+        }) {
+            if *existing && !preexisting {
+                *existing = false;
+            }
+            return;
+        }
         self.ledger.push(LedgerEntry::Route {
             dest: route.dest.clone(),
             mask: route.mask.clone(),
@@ -1092,6 +1115,27 @@ mod tests {
             ))
         );
         assert_eq!(route_ipv4(&route_entry("bad", "255.255.255.0", 24)), None);
+    }
+
+    #[test]
+    fn 路由账本_重复写入不增加条数并升级归属() {
+        let mut net = NetConfig::new("topsap0");
+        let route = route_entry("10.0.0.0", "255.0.0.0", 8);
+        let hop = Ipv4Addr::new(10, 0, 0, 1);
+
+        net.note_route(&route, hop, 17, true);
+        net.note_route(&route, hop, 17, true);
+        assert_eq!(net.route_count(), 1);
+
+        net.note_route(&route, hop, 17, false);
+        assert_eq!(net.route_count(), 1);
+        assert!(matches!(
+            net.ledger[0],
+            LedgerEntry::Route {
+                preexisting: false,
+                ..
+            }
+        ));
     }
 
     #[test]

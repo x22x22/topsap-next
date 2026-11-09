@@ -1326,6 +1326,86 @@ impl Engine {
         let _ = self.disconnect().await;
     }
 
+    async fn repair_network(self: &Arc<Self>, session: &LoginSession) -> Result<(), String> {
+        let Some(mut net) = ({ self.lock().net.take() }) else {
+            return Err("网络配置已释放".to_string());
+        };
+        let gateway_ip = tls::resolve_ip(&session.gateway)
+            .await
+            .ok()
+            .map(|ip| ip.to_string())
+            .or_else(|| session.gateway_ip.clone());
+
+        let mut outcome = net
+            .configure_interface(&session.vip, &session.vip_mask)
+            .await
+            .map(|_| ())
+            .map_err(|err| err.to_string());
+        if outcome.is_ok() {
+            if let Some(gateway_ip) = &gateway_ip {
+                if !net.bypass_gateway(gateway_ip).await {
+                    self.log("警告：重连后未能恢复网关旁路路由");
+                }
+            }
+            let report = net.add_routes(&session.routes, false).await;
+            for note in net.take_notes() {
+                self.log(note);
+            }
+            if !session.routes.is_empty() && report.ok == 0 {
+                outcome = Err("重连后路由恢复失败，内网流量无法进入隧道".to_string());
+            } else {
+                if !report.all_ok() {
+                    self.log(format!(
+                        "警告：重连后 {} 条路由未生效（{}）",
+                        report.failed.len(),
+                        report.failed.join("、")
+                    ));
+                }
+                let dns_ok = net.set_dns(&session.dns1, &session.dns2).await;
+                for note in net.take_notes() {
+                    self.log(note);
+                }
+                if !dns_ok && !cfg!(target_os = "linux") {
+                    self.log("警告：重连后 DNS 恢复失败");
+                }
+                let dns_servers = if session.dns2.is_empty() {
+                    session.dns1.clone()
+                } else {
+                    format!("{} / {}", session.dns1, session.dns2)
+                };
+                self.log(format!(
+                    "重连网络配置已校验：{}/{} 条路由，DNS {}",
+                    report.ok,
+                    session.routes.len(),
+                    dns_servers
+                ));
+            }
+        }
+
+        let mut net = Some(net);
+        let cancelled = {
+            let mut inner = self.lock();
+            if inner.cancel.is_cancelled() {
+                true
+            } else {
+                if let Some(gateway_ip) = gateway_ip {
+                    if let Some(current) = inner.session.as_mut() {
+                        current.gateway_ip = Some(gateway_ip);
+                    }
+                }
+                inner.net = net.take();
+                false
+            }
+        };
+        if cancelled {
+            if let Some(mut net) = net {
+                net.cleanup().await;
+            }
+            return Err("连接已取消".to_string());
+        }
+        outcome
+    }
+
     async fn reopen_tunnel(
         self: &Arc<Self>,
         session: &LoginSession,
@@ -1335,6 +1415,8 @@ impl Engine {
         let Some(tun) = tun else {
             return Err("虚拟网卡已释放".to_string());
         };
+
+        self.repair_network(session).await?;
 
         let (event_tx, event_rx) = mpsc::channel::<TunnelEvent>(tunnel::EVENT_QUEUE);
         let tunnel = tunnel::open(session, event_tx, cancel.clone())
