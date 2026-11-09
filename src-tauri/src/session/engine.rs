@@ -1186,7 +1186,7 @@ impl Engine {
         self.set_phase(Phase::Connected, "");
         self.uplink_drops.store(0, Ordering::Relaxed);
         if self.closed_generation.load(Ordering::SeqCst) == generation {
-            self.on_tunnel_closed("隧道建立后立即断开".to_string(), generation);
+            self.on_tunnel_closed("连接建立后立即断开".to_string(), generation);
         }
         if session.account_end_days > 0 || session.password_remind_days > 0 {
             self.emit(EngineEvent::ExpiryReminder {
@@ -1429,7 +1429,7 @@ impl Engine {
                     format!("{} / {}", session.dns1, session.dns2)
                 };
                 self.log(format!(
-                    "重连网络配置已校验：{}/{} 条路由，DNS {}",
+                    "重连后网络配置已复核：{}/{} 条路由，DNS {}",
                     report.ok,
                     session.routes.len(),
                     dns_servers
