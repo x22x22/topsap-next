@@ -1393,6 +1393,9 @@ impl Engine {
             .await
             .map(|_| ())
             .map_err(|err| err.to_string());
+        for note in net.take_notes() {
+            self.log(note);
+        }
         if outcome.is_ok() {
             if let Some(gateway_ip) = &gateway_ip {
                 if !net.bypass_gateway(gateway_ip).await {
