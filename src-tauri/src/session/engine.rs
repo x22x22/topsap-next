@@ -1343,8 +1343,12 @@ impl Engine {
 
         let task = spawn_tunnel_events(event_rx, tun, Arc::downgrade(self));
         let mut inner = self.lock();
-        inner.tunnel = Some(tunnel);
+        let old = inner.tunnel.replace(tunnel);
         inner.tunnel_task = Some(task);
+        drop(inner);
+        if let Some(old) = old {
+            old.close();
+        }
         Ok(())
     }
 }

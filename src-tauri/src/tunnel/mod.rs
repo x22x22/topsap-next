@@ -106,7 +106,7 @@ impl TunnelHandle {
 pub async fn open(
     session: &LoginSession,
     events: mpsc::Sender<TunnelEvent>,
-    cancel: CancellationToken,
+    parent: CancellationToken,
 ) -> Result<TunnelHandle, TunnelError> {
     let (mut stream, _ip) = tls::connect(&session.gateway, session.port).await?;
 
@@ -119,6 +119,7 @@ pub async fn open(
 
     let (read_half, write_half) = tokio::io::split(stream);
     let (outbound_tx, outbound_rx) = mpsc::channel::<Vec<u8>>(OUTBOUND_QUEUE);
+    let cancel = parent.child_token();
 
     let bytes_up = Arc::new(AtomicU64::new(0));
     let bytes_down = Arc::new(AtomicU64::new(0));
