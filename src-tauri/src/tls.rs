@@ -8,6 +8,7 @@
 
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
@@ -147,9 +148,29 @@ pub async fn resolve_ip(host: &str) -> Result<IpAddr, TlsError> {
     })
 }
 
+/// 带短超时的解析：重连时避免 VPN DNS 失效导致长时间等待
+pub async fn resolve_ip_with_timeout(host: &str, budget: Duration) -> Result<IpAddr, TlsError> {
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return Ok(ip);
+    }
+    match tokio::time::timeout(budget, resolve_ip(host)).await {
+        Ok(result) => result,
+        Err(_) => Err(TlsError::Resolve {
+            host: host.to_string(),
+            reason: "DNS 解析超时".to_string(),
+        }),
+    }
+}
+
 /// 建立到网关的 TLS 连接，返回连接与解析后的 IP（供旁路路由使用）。
 pub async fn connect(host: &str, port: u16) -> Result<(TlsStream<TcpStream>, IpAddr), TlsError> {
     let ip = resolve_ip(host).await?;
+    let stream = connect_ip(ip, port).await?;
+    Ok((stream, ip))
+}
+
+/// 直接连接已解析的网关 IP，跳过重复 DNS 解析
+pub async fn connect_ip(ip: IpAddr, port: u16) -> Result<TlsStream<TcpStream>, TlsError> {
     let addr = SocketAddr::new(ip, port);
 
     let tcp = TcpStream::connect(addr).await.map_err(|e| TlsError::Tcp {
@@ -161,12 +182,10 @@ pub async fn connect(host: &str, port: u16) -> Result<(TlsStream<TcpStream>, IpA
 
     let server_name = ServerName::IpAddress(ip.into());
     let connector = TlsConnector::from(client_config());
-    let stream = connector
+    connector
         .connect(server_name, tcp)
         .await
-        .map_err(|e| TlsError::Handshake(describe_handshake_error(&e)))?;
-
-    Ok((stream, ip))
+        .map_err(|e| TlsError::Handshake(describe_handshake_error(&e)))
 }
 
 /// 把系统 DNS 错误归一成可读原因，避免展示本地化的「不知道这样的主机」
@@ -242,5 +261,13 @@ mod tests {
         let msg = err.user_message();
         assert!(msg.contains("未知主机"));
         assert!(msg.contains("域名拼写"));
+    }
+
+    #[tokio::test]
+    async fn 带超时解析_ip_直接返回() {
+        let ip = resolve_ip_with_timeout("198.51.100.10", Duration::from_millis(1))
+            .await
+            .expect("IP literal should resolve");
+        assert_eq!(ip, "198.51.100.10".parse::<IpAddr>().unwrap());
     }
 }

@@ -10,6 +10,7 @@
 //! ↔ 数据帧（type=15，原始 IPv4）
 //! ```
 
+use std::net::IpAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -108,8 +109,27 @@ pub async fn open(
     events: mpsc::Sender<TunnelEvent>,
     parent: CancellationToken,
 ) -> Result<TunnelHandle, TunnelError> {
-    let (mut stream, _ip) = tls::connect(&session.gateway, session.port).await?;
+    let (stream, _ip) = tls::connect(&session.gateway, session.port).await?;
+    finish_open(stream, session, events, parent).await
+}
 
+/// 使用已解析的网关 IP 建立隧道，避免重连时重复解析域名
+pub async fn open_at(
+    session: &LoginSession,
+    events: mpsc::Sender<TunnelEvent>,
+    parent: CancellationToken,
+    ip: IpAddr,
+) -> Result<TunnelHandle, TunnelError> {
+    let stream = tls::connect_ip(ip, session.port).await?;
+    finish_open(stream, session, events, parent).await
+}
+
+async fn finish_open(
+    mut stream: TlsStream<TcpStream>,
+    session: &LoginSession,
+    events: mpsc::Sender<TunnelEvent>,
+    parent: CancellationToken,
+) -> Result<TunnelHandle, TunnelError> {
     let (parser, prefetched) = tokio::time::timeout(
         HANDSHAKE_TIMEOUT,
         handshake(&mut stream, &session.session_id),

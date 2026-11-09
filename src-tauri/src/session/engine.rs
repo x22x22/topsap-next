@@ -2,6 +2,7 @@
 //!
 //! 锁纪律：`std::sync::Mutex` 只在同步块内短持有，绝不跨 `.await`。
 
+use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -32,6 +33,7 @@ const CAPTCHA_TIMEOUT: Duration = Duration::from_secs(120);
 const SMS_TIMEOUT: Duration = Duration::from_secs(300);
 const ROUTE_CONFLICT_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_RECONNECT: u32 = 5;
+const GATEWAY_RESOLVE_TIMEOUT: Duration = Duration::from_secs(3);
 
 struct Inner {
     phase: Phase,
@@ -1378,15 +1380,14 @@ impl Engine {
         let _ = self.disconnect().await;
     }
 
-    async fn repair_network(self: &Arc<Self>, session: &LoginSession) -> Result<(), String> {
+    async fn repair_network(
+        self: &Arc<Self>,
+        session: &LoginSession,
+        gateway_ip: IpAddr,
+    ) -> Result<(), String> {
         let Some(mut net) = ({ self.lock().net.take() }) else {
             return Err("网络配置已释放".to_string());
         };
-        let gateway_ip = tls::resolve_ip(&session.gateway)
-            .await
-            .ok()
-            .map(|ip| ip.to_string())
-            .or_else(|| session.gateway_ip.clone());
 
         let mut outcome = net
             .configure_interface(&session.vip, &session.vip_mask)
@@ -1397,10 +1398,8 @@ impl Engine {
             self.log(note);
         }
         if outcome.is_ok() {
-            if let Some(gateway_ip) = &gateway_ip {
-                if !net.bypass_gateway(gateway_ip).await {
-                    self.log("警告：重连后未能恢复网关旁路路由");
-                }
+            if !net.bypass_gateway(&gateway_ip.to_string()).await {
+                self.log("警告：重连后未能恢复网关旁路路由");
             }
             let report = net.add_routes(&session.routes, false).await;
             for note in net.take_notes() {
@@ -1443,10 +1442,8 @@ impl Engine {
             if inner.cancel.is_cancelled() {
                 true
             } else {
-                if let Some(gateway_ip) = gateway_ip {
-                    if let Some(current) = inner.session.as_mut() {
-                        current.gateway_ip = Some(gateway_ip);
-                    }
+                if let Some(current) = inner.session.as_mut() {
+                    current.gateway_ip = Some(gateway_ip.to_string());
                 }
                 inner.net = net.take();
                 false
@@ -1461,6 +1458,58 @@ impl Engine {
         outcome
     }
 
+    async fn reconnect_gateway_ip(&self, session: &LoginSession) -> Result<IpAddr, String> {
+        if let Some(ip) = cached_gateway_ip(session) {
+            return Ok(ip);
+        }
+        tls::resolve_ip_with_timeout(&session.gateway, GATEWAY_RESOLVE_TIMEOUT)
+            .await
+            .map_err(|err| err.user_message())
+    }
+
+    async fn switch_gateway_ip(self: &Arc<Self>, ip: IpAddr) {
+        let Some(mut net) = ({ self.lock().net.take() }) else {
+            return;
+        };
+        if !net.bypass_gateway(&ip.to_string()).await {
+            self.log("警告：重连后未能为新网关地址添加旁路路由");
+        }
+        for note in net.take_notes() {
+            self.log(note);
+        }
+        let mut net = Some(net);
+        let cancelled = {
+            let mut inner = self.lock();
+            if inner.cancel.is_cancelled() {
+                true
+            } else {
+                if let Some(current) = inner.session.as_mut() {
+                    current.gateway_ip = Some(ip.to_string());
+                }
+                inner.net = net.take();
+                false
+            }
+        };
+        if cancelled {
+            if let Some(mut net) = net {
+                net.cleanup().await;
+            }
+        }
+    }
+
+    async fn open_tunnel_at(
+        &self,
+        session: &LoginSession,
+        cancel: &CancellationToken,
+        ip: IpAddr,
+    ) -> Result<(TunnelHandle, mpsc::Receiver<TunnelEvent>), String> {
+        let (event_tx, event_rx) = mpsc::channel::<TunnelEvent>(tunnel::EVENT_QUEUE);
+        let tunnel = tunnel::open_at(session, event_tx, cancel.clone(), ip)
+            .await
+            .map_err(|err| err.to_string())?;
+        Ok((tunnel, event_rx))
+    }
+
     async fn reopen_tunnel(
         self: &Arc<Self>,
         session: &LoginSession,
@@ -1471,12 +1520,21 @@ impl Engine {
             return Err("虚拟网卡已释放".to_string());
         };
 
-        self.repair_network(session).await?;
+        let gateway_ip = self.reconnect_gateway_ip(session).await?;
+        self.repair_network(session, gateway_ip).await?;
 
-        let (event_tx, event_rx) = mpsc::channel::<TunnelEvent>(tunnel::EVENT_QUEUE);
-        let tunnel = tunnel::open(session, event_tx, cancel.clone())
-            .await
-            .map_err(|e| e.to_string())?;
+        let mut opened = self.open_tunnel_at(session, cancel, gateway_ip).await;
+        if opened.is_err() {
+            if let Ok(resolved) =
+                tls::resolve_ip_with_timeout(&session.gateway, GATEWAY_RESOLVE_TIMEOUT).await
+            {
+                if resolved != gateway_ip {
+                    self.switch_gateway_ip(resolved).await;
+                    opened = self.open_tunnel_at(session, cancel, resolved).await;
+                }
+            }
+        }
+        let (tunnel, event_rx) = opened?;
 
         let generation = {
             let mut inner = self.lock();
@@ -1509,6 +1567,14 @@ impl Engine {
         }
         Ok(())
     }
+}
+
+/// 登录时缓存的网关 IP；缺失或格式非法时返回 None
+fn cached_gateway_ip(session: &LoginSession) -> Option<IpAddr> {
+    session
+        .gateway_ip
+        .as_deref()
+        .and_then(|value| value.parse().ok())
 }
 
 fn spawn_tunnel_events(
@@ -1762,5 +1828,25 @@ async fn probe_line(
         Err(_) => Err(format!(
             "网关探测超时（{timeout_secs} 秒），请检查网络连接或端口是否正确"
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn 缓存网关_ip_仅接受合法地址() {
+        let mut session = LoginSession::default();
+        assert_eq!(cached_gateway_ip(&session), None);
+
+        session.gateway_ip = Some("198.51.100.10".to_string());
+        assert_eq!(
+            cached_gateway_ip(&session),
+            Some("198.51.100.10".parse::<IpAddr>().unwrap())
+        );
+
+        session.gateway_ip = Some("vpn.example.com".to_string());
+        assert_eq!(cached_gateway_ip(&session), None);
     }
 }
