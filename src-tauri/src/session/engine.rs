@@ -109,6 +109,8 @@ pub struct Engine {
     reconnecting: AtomicBool,
     /// 最近一次已关闭的隧道代际
     closed_generation: AtomicU64,
+    /// 上行报文发送失败计数，用于限频日志
+    uplink_drops: AtomicU64,
 }
 
 /// 离开作用域时自动清除「连接中」标记，异常路径也不会卡死
@@ -142,6 +144,7 @@ impl Engine {
             connecting: AtomicBool::new(false),
             reconnecting: AtomicBool::new(false),
             closed_generation: AtomicU64::new(0),
+            uplink_drops: AtomicU64::new(0),
         })
     }
 
@@ -247,6 +250,18 @@ impl Engine {
 
     pub fn is_connected(&self) -> bool {
         self.lock().phase.connected()
+    }
+
+    fn note_uplink_drop(&self) {
+        if !self.is_connected() {
+            return;
+        }
+        let count = self.uplink_drops.fetch_add(1, Ordering::Relaxed) + 1;
+        if count == 1 || count % 1000 == 0 {
+            self.log(format!(
+                "上行报文发送失败，已丢弃 {count} 个（隧道未就绪或发送队列已满）"
+            ));
+        }
     }
 
     /// 当前连接使用的 TUN 接口名；未创建网卡时为空
@@ -1169,6 +1184,7 @@ impl Engine {
         }
 
         self.set_phase(Phase::Connected, "");
+        self.uplink_drops.store(0, Ordering::Relaxed);
         if session.account_end_days > 0 || session.password_remind_days > 0 {
             self.emit(EngineEvent::ExpiryReminder {
                 account_end: session.account_end_days,
@@ -1480,6 +1496,7 @@ impl Engine {
             return Err("新隧道建立后立即断开".to_string());
         }
         self.set_phase(Phase::Connected, "");
+        self.uplink_drops.store(0, Ordering::Relaxed);
         Ok(())
     }
 }
@@ -1528,7 +1545,9 @@ fn spawn_uplink(
                     let Some(engine) = engine.upgrade() else { return };
                     let tunnel = { engine.lock().tunnel.clone() };
                     if let Some(tunnel) = tunnel {
-                        let _ = tunnel.send_packet(packet);
+                        if !tunnel.send_packet(packet) {
+                            engine.note_uplink_drop();
+                        }
                     }
                 }
             }
