@@ -3,7 +3,7 @@
 //! 锁纪律：`std::sync::Mutex` 只在同步块内短持有，绝不跨 `.await`。
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -38,6 +38,7 @@ struct Inner {
     detail: String,
     session: Option<LoginSession>,
     tunnel: Option<TunnelHandle>,
+    tunnel_generation: u64,
     tun: Option<Arc<TunDevice>>,
     net: Option<NetConfig>,
     started_at: Option<Instant>,
@@ -75,6 +76,7 @@ impl Inner {
             detail: String::new(),
             session: None,
             tunnel: None,
+            tunnel_generation: 0,
             tun: None,
             net: None,
             started_at: None,
@@ -103,12 +105,25 @@ pub struct Engine {
     login_err_num: Mutex<std::collections::HashMap<String, u32>>,
     /// 防止用户连点或事件延迟导致并发连接
     connecting: AtomicBool,
+    /// 防止多个 Closed 事件并发启动重连循环
+    reconnecting: AtomicBool,
+    /// 最近一次已关闭的隧道代际
+    closed_generation: AtomicU64,
 }
 
 /// 离开作用域时自动清除「连接中」标记，异常路径也不会卡死
 struct BusyGuard<'a>(&'a AtomicBool);
 
 impl Drop for BusyGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+/// 离开作用域时自动清除「重连中」标记，异常路径也不会留下并发循环
+struct ReconnectGuard<'a>(&'a AtomicBool);
+
+impl Drop for ReconnectGuard<'_> {
     fn drop(&mut self) {
         self.0.store(false, Ordering::SeqCst);
     }
@@ -125,6 +140,8 @@ impl Engine {
             route_conflict: Mutex::new(None),
             login_err_num: Mutex::new(std::collections::HashMap::new()),
             connecting: AtomicBool::new(false),
+            reconnecting: AtomicBool::new(false),
+            closed_generation: AtomicU64::new(0),
         })
     }
 
@@ -1127,8 +1144,13 @@ impl Engine {
 
         let uplink_task = spawn_uplink(up_rx, Arc::downgrade(self), cancel.clone());
 
-        // 下行：隧道 → 网卡
-        let tunnel_task = spawn_tunnel_events(event_rx, tun.clone(), Arc::downgrade(self));
+        let generation = {
+            let mut inner = self.lock();
+            inner.tunnel_generation = inner.tunnel_generation.wrapping_add(1);
+            inner.tunnel_generation
+        };
+        let tunnel_task =
+            spawn_tunnel_events(event_rx, tun.clone(), Arc::downgrade(self), generation);
 
         // 统计推送
         let stats_task = spawn_stats(Arc::downgrade(self), cancel.clone());
@@ -1274,12 +1296,25 @@ impl Engine {
         cleanup_ok
     }
 
-    fn on_tunnel_closed(self: &Arc<Self>, reason: String) {
+    fn on_tunnel_closed(self: &Arc<Self>, reason: String, generation: u64) {
         let engine = self.clone();
-        tokio::spawn(async move { engine.handle_tunnel_closed(reason).await });
+        tokio::spawn(async move { engine.handle_tunnel_closed(reason, generation).await });
     }
 
-    async fn handle_tunnel_closed(self: Arc<Self>, reason: String) {
+    async fn handle_tunnel_closed(self: Arc<Self>, reason: String, generation: u64) {
+        {
+            let inner = self.lock();
+            if generation != inner.tunnel_generation {
+                return;
+            }
+        }
+        self.closed_generation.store(generation, Ordering::SeqCst);
+
+        if self.reconnecting.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let _guard = ReconnectGuard(&self.reconnecting);
+
         let auto_reconnect = crate::settings::load(&self.app).auto_reconnect;
         let should_reconnect = {
             let inner = self.lock();
@@ -1290,7 +1325,6 @@ impl Engine {
         }
 
         if !auto_reconnect {
-            // 用户关闭了自动重连：直接断开并清理
             self.log(format!("隧道已断开：{reason}，自动重连已关闭"));
             let _ = self.disconnect().await;
             return;
@@ -1315,7 +1349,6 @@ impl Engine {
             match self.reopen_tunnel(&session, &cancel).await {
                 Ok(()) => {
                     self.log("隧道已恢复");
-                    self.set_phase(Phase::Connected, "");
                     return;
                 }
                 Err(err) => self.log(format!("重连失败：{err}")),
@@ -1423,14 +1456,30 @@ impl Engine {
             .await
             .map_err(|e| e.to_string())?;
 
-        let task = spawn_tunnel_events(event_rx, tun, Arc::downgrade(self));
-        let mut inner = self.lock();
-        let old = inner.tunnel.replace(tunnel);
-        inner.tunnel_task = Some(task);
-        drop(inner);
+        let generation = {
+            let mut inner = self.lock();
+            inner.tunnel_generation = inner.tunnel_generation.wrapping_add(1);
+            inner.tunnel_generation
+        };
+        let task = spawn_tunnel_events(event_rx, tun, Arc::downgrade(self), generation);
+        let old = {
+            let mut inner = self.lock();
+            let old = inner.tunnel.replace(tunnel);
+            inner.tunnel_task = Some(task);
+            old
+        };
         if let Some(old) = old {
             old.close();
         }
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        if cancel.is_cancelled() {
+            return Err("连接已取消".to_string());
+        }
+        if self.closed_generation.load(Ordering::SeqCst) == generation {
+            return Err("新隧道建立后立即断开".to_string());
+        }
+        self.set_phase(Phase::Connected, "");
         Ok(())
     }
 }
@@ -1439,6 +1488,7 @@ fn spawn_tunnel_events(
     mut event_rx: mpsc::Receiver<TunnelEvent>,
     tun: Arc<TunDevice>,
     engine: std::sync::Weak<Engine>,
+    generation: u64,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         while let Some(event) = event_rx.recv().await {
@@ -1453,7 +1503,7 @@ fn spawn_tunnel_events(
                 }
                 TunnelEvent::Closed { reason } => {
                     if let Some(engine) = engine.upgrade() {
-                        engine.on_tunnel_closed(reason);
+                        engine.on_tunnel_closed(reason, generation);
                     }
                     return;
                 }
