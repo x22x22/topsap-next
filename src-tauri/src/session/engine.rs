@@ -44,6 +44,7 @@ struct Inner {
     user_disconnect: bool,
     cancel: CancellationToken,
     stats_task: Option<JoinHandle<()>>,
+    uplink_task: Option<JoinHandle<()>>,
     tunnel_task: Option<JoinHandle<()>>,
     reader_stop: Option<Arc<AtomicBool>>,
     reader_handle: Option<std::thread::JoinHandle<()>>,
@@ -80,6 +81,7 @@ impl Inner {
             user_disconnect: false,
             cancel: CancellationToken::new(),
             stats_task: None,
+            uplink_task: None,
             tunnel_task: None,
             reader_stop: None,
             reader_handle: None,
@@ -1106,9 +1108,8 @@ impl Engine {
             dns_note
         ));
 
-        // 上行：网卡 → 隧道
         let reader_stop = Arc::new(AtomicBool::new(true));
-        let (up_tx, mut up_rx) = mpsc::channel::<Vec<u8>>(1024);
+        let (up_tx, up_rx) = mpsc::channel::<Vec<u8>>(1024);
         let reader_device = tun.clone();
         let stop = reader_stop.clone();
         let reader = std::thread::spawn(move || {
@@ -1124,19 +1125,7 @@ impl Engine {
             }
         });
 
-        let tunnel_up = tunnel.clone();
-        let cancel_up = cancel.clone();
-        tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    _ = cancel_up.cancelled() => return,
-                    packet = up_rx.recv() => match packet {
-                        Some(packet) => { let _ = tunnel_up.send_packet(packet); }
-                        None => return,
-                    }
-                }
-            }
-        });
+        let uplink_task = spawn_uplink(up_rx, Arc::downgrade(self), cancel.clone());
 
         // 下行：隧道 → 网卡
         let tunnel_task = spawn_tunnel_events(event_rx, tun.clone(), Arc::downgrade(self));
@@ -1151,6 +1140,7 @@ impl Engine {
             inner.tunnel = Some(tunnel);
             inner.reader_stop = Some(reader_stop);
             inner.reader_handle = Some(reader);
+            inner.uplink_task = Some(uplink_task);
             inner.tunnel_task = Some(tunnel_task);
             inner.stats_task = Some(stats_task);
             inner.started_at = Some(Instant::now());
@@ -1190,7 +1180,7 @@ impl Engine {
     }
 
     async fn teardown(self: &Arc<Self>) -> bool {
-        let (tunnel, net, reader_stop, reader, tunnel_task, stats_task, session) = {
+        let (tunnel, net, reader_stop, reader, uplink_task, tunnel_task, stats_task, session) = {
             let mut inner = self.lock();
             inner.user_disconnect = true;
             inner.cancel.cancel();
@@ -1200,6 +1190,7 @@ impl Engine {
                 inner.net.take(),
                 inner.reader_stop.take(),
                 inner.reader_handle.take(),
+                inner.uplink_task.take(),
                 inner.tunnel_task.take(),
                 inner.stats_task.take(),
                 inner.session.clone(),
@@ -1216,6 +1207,10 @@ impl Engine {
             let _ = task.await;
         }
         if let Some(task) = stats_task {
+            task.abort();
+            let _ = task.await;
+        }
+        if let Some(task) = uplink_task {
             task.abort();
             let _ = task.await;
         }
@@ -1377,6 +1372,29 @@ fn spawn_tunnel_events(
                     return;
                 }
                 TunnelEvent::Ready => {}
+            }
+        }
+    })
+}
+
+/// 上行泵：每个报文都读取当前隧道句柄，重连替换句柄后自动走新隧道
+fn spawn_uplink(
+    mut up_rx: mpsc::Receiver<Vec<u8>>,
+    engine: std::sync::Weak<Engine>,
+    cancel: CancellationToken,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => return,
+                packet = up_rx.recv() => {
+                    let Some(packet) = packet else { return };
+                    let Some(engine) = engine.upgrade() else { return };
+                    let tunnel = { engine.lock().tunnel.clone() };
+                    if let Some(tunnel) = tunnel {
+                        let _ = tunnel.send_packet(packet);
+                    }
+                }
             }
         }
     })
