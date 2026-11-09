@@ -1185,6 +1185,9 @@ impl Engine {
 
         self.set_phase(Phase::Connected, "");
         self.uplink_drops.store(0, Ordering::Relaxed);
+        if self.closed_generation.load(Ordering::SeqCst) == generation {
+            self.on_tunnel_closed("隧道建立后立即断开".to_string(), generation);
+        }
         if session.account_end_days > 0 || session.password_remind_days > 0 {
             self.emit(EngineEvent::ExpiryReminder {
                 account_end: session.account_end_days,
@@ -1497,6 +1500,10 @@ impl Engine {
         }
         self.set_phase(Phase::Connected, "");
         self.uplink_drops.store(0, Ordering::Relaxed);
+        if self.closed_generation.load(Ordering::SeqCst) == generation {
+            self.set_phase(Phase::Reconnecting, "正在重连");
+            return Err("新隧道建立后立即断开".to_string());
+        }
         Ok(())
     }
 }
