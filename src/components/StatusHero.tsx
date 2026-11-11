@@ -1,5 +1,6 @@
 import { Loader2, ShieldAlert, ShieldCheck, ShieldOff } from "lucide-react";
 
+import { localizeError } from "../lib/errorText";
 import { useI18n } from "../lib/i18n";
 import type { EnginePhase } from "../types/engine";
 import { Card, StatusDot, cn } from "./ui";
@@ -76,7 +77,9 @@ export function StatusHero({
             <h2 className="mt-1 text-xl font-semibold tracking-tight">{t(label)}</h2>
             <p className="mt-1 min-h-4 text-xs text-muted">
               {detail
-                ? t(detail)
+                ? failed
+                  ? localizeError(detail)
+                  : t(detail)
                 : t(
                     failed
                       ? "请检查错误日志后重试"
