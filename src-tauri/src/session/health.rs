@@ -84,6 +84,12 @@ pub struct HealthTracker {
     delivery_packets: u64,
 }
 
+impl Default for HealthTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HealthTracker {
     pub fn new() -> Self {
         Self {
@@ -135,15 +141,12 @@ impl HealthTracker {
             self.clear_counters();
             return Some(HealthIssue::UplinkStalled);
         }
-        if self.downlink_windows >= DOWNLINK_SILENT_WINDOWS
-            && self.downlink_packets >= MIN_PACKETS
+        if self.downlink_windows >= DOWNLINK_SILENT_WINDOWS && self.downlink_packets >= MIN_PACKETS
         {
             self.clear_counters();
             return Some(HealthIssue::DownlinkSilent);
         }
-        if self.delivery_windows >= DELIVERY_STALL_WINDOWS
-            && self.delivery_packets >= MIN_PACKETS
-        {
+        if self.delivery_windows >= DELIVERY_STALL_WINDOWS && self.delivery_packets >= MIN_PACKETS {
             self.clear_counters();
             return Some(HealthIssue::DeliveryStalled);
         }
@@ -209,7 +212,12 @@ impl HealthTracker {
 mod tests {
     use super::*;
 
-    fn sample(generation: u64, packets_in: u64, packets_up: u64, packets_down: u64) -> HealthSample {
+    fn sample(
+        generation: u64,
+        packets_in: u64,
+        packets_up: u64,
+        packets_down: u64,
+    ) -> HealthSample {
         HealthSample {
             generation,
             packets_in,
@@ -232,15 +240,9 @@ mod tests {
     #[test]
     fn 空闲不判定() {
         let mut tracker = HealthTracker::new();
-        assert_eq!(
-            observe(&mut tracker, 0, sample(1, 0, 0, 0)),
-            None
-        );
+        assert_eq!(observe(&mut tracker, 0, sample(1, 0, 0, 0)), None);
         for second in (15..=600).step_by(15) {
-            assert_eq!(
-                observe(&mut tracker, second, sample(1, 0, 0, 0)),
-                None
-            );
+            assert_eq!(observe(&mut tracker, second, sample(1, 0, 0, 0)), None);
         }
     }
 
@@ -251,11 +253,7 @@ mod tests {
         for (index, second) in (30..=300).step_by(15).enumerate() {
             let base = (index as u64 + 1) * 30;
             assert_eq!(
-                observe(
-                    &mut tracker,
-                    second,
-                    sample(1, base, base, base)
-                ),
+                observe(&mut tracker, second, sample(1, base, base, base)),
                 None
             );
         }
@@ -335,13 +333,7 @@ mod tests {
         for second in [45, 60, 75] {
             observe(&mut tracker, second, sample(1, second * 2, 0, 0));
         }
-        assert_eq!(
-            observe(&mut tracker, 90, sample(2, 0, 0, 0)),
-            None
-        );
-        assert_eq!(
-            observe(&mut tracker, 100, sample(2, 100, 0, 0)),
-            None
-        );
+        assert_eq!(observe(&mut tracker, 90, sample(2, 0, 0, 0)), None);
+        assert_eq!(observe(&mut tracker, 100, sample(2, 100, 0, 0)), None);
     }
 }

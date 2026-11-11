@@ -27,6 +27,7 @@ use crate::tls;
 use crate::tun::{TunDevice, ADAPTER_NAME};
 use crate::tunnel::{self, TunnelEvent, TunnelHandle};
 
+use super::health::{HealthIssue, HealthSample, HealthTracker};
 use super::state::Phase;
 
 const CAPTCHA_TIMEOUT: Duration = Duration::from_secs(120);
@@ -34,6 +35,12 @@ const SMS_TIMEOUT: Duration = Duration::from_secs(300);
 const ROUTE_CONFLICT_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_RECONNECT: u32 = 5;
 const GATEWAY_RESOLVE_TIMEOUT: Duration = Duration::from_secs(3);
+const HEALTH_RECONNECT_MAX: u32 = 3;
+const HEALTH_VERIFY_TIMEOUT: Duration = Duration::from_secs(10);
+const HEALTH_RECOVERY_COOLDOWN: Duration = Duration::from_secs(90);
+const HEALTH_RECOVERY_WINDOW: Duration = Duration::from_secs(600);
+const HEALTH_RECOVERY_LIMIT: u32 = 3;
+const HEALTH_FAIL_MESSAGE: &str = "网关未恢复数据转发，请重新登录";
 
 struct Inner {
     phase: Phase,
@@ -47,6 +54,7 @@ struct Inner {
     user_disconnect: bool,
     cancel: CancellationToken,
     stats_task: Option<JoinHandle<()>>,
+    health_task: Option<JoinHandle<()>>,
     uplink_task: Option<JoinHandle<()>>,
     tunnel_task: Option<JoinHandle<()>>,
     reader_stop: Option<Arc<AtomicBool>>,
@@ -85,6 +93,7 @@ impl Inner {
             user_disconnect: false,
             cancel: CancellationToken::new(),
             stats_task: None,
+            health_task: None,
             uplink_task: None,
             tunnel_task: None,
             reader_stop: None,
@@ -113,6 +122,27 @@ pub struct Engine {
     closed_generation: AtomicU64,
     /// 上行报文发送失败计数，用于限频日志
     uplink_drops: AtomicU64,
+    /// 本轮连接内进入上行泵的 TCP / ICMP 包数，用于判断是否应当出现下行响应
+    health_tcp_in: AtomicU64,
+    health_icmp_in: AtomicU64,
+    /// 健康恢复的冷却与次数限制，避免网关持续不转发时无限重连
+    health_recovery: Mutex<HealthRecoveryState>,
+    /// 自动重连关闭时的提示限频
+    health_notice_at: Mutex<Option<Instant>>,
+}
+
+#[derive(Default)]
+struct HealthRecoveryState {
+    last_at: Option<Instant>,
+    window_start: Option<Instant>,
+    count: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecoveryGate {
+    Allowed,
+    Cooling,
+    Exhausted,
 }
 
 /// 离开作用域时自动清除「连接中」标记，异常路径也不会卡死
@@ -147,6 +177,10 @@ impl Engine {
             reconnecting: AtomicBool::new(false),
             closed_generation: AtomicU64::new(0),
             uplink_drops: AtomicU64::new(0),
+            health_tcp_in: AtomicU64::new(0),
+            health_icmp_in: AtomicU64::new(0),
+            health_recovery: Mutex::new(HealthRecoveryState::default()),
+            health_notice_at: Mutex::new(None),
         })
     }
 
@@ -347,6 +381,89 @@ impl Engine {
             packets_out,
             dropped_out,
         }
+    }
+
+    fn note_uplink_packet(&self, packet: &[u8]) {
+        match ipv4_protocol(packet) {
+            Some(6) => {
+                self.health_tcp_in.fetch_add(1, Ordering::Relaxed);
+            }
+            Some(1) => {
+                self.health_icmp_in.fetch_add(1, Ordering::Relaxed);
+            }
+            _ => {}
+        }
+    }
+
+    fn health_sample(&self) -> Option<HealthSample> {
+        let inner = self.lock();
+        let tunnel = inner.tunnel.as_ref()?;
+        let tun = inner.tun.as_ref()?;
+        let stats = tunnel.stats();
+        Some(HealthSample {
+            generation: inner.tunnel_generation,
+            packets_in: tun.packets_in(),
+            packets_up: stats.packets_up,
+            packets_down: stats.packets_down,
+            packets_out: tun.packets_out(),
+            dropped_out: tun.dropped_out(),
+            uplink_drops: self.uplink_drops.load(Ordering::Relaxed),
+            tcp_in: self.health_tcp_in.load(Ordering::Relaxed),
+            icmp_in: self.health_icmp_in.load(Ordering::Relaxed),
+        })
+    }
+
+    fn begin_health_recovery(&self) -> RecoveryGate {
+        let mut state = self
+            .health_recovery
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        if let Some(window_start) = state.window_start {
+            if now.duration_since(window_start) > HEALTH_RECOVERY_WINDOW {
+                state.window_start = Some(now);
+                state.count = 0;
+            }
+        } else {
+            state.window_start = Some(now);
+        }
+        if let Some(last_at) = state.last_at {
+            if now.duration_since(last_at) < HEALTH_RECOVERY_COOLDOWN {
+                return RecoveryGate::Cooling;
+            }
+        }
+        if state.count >= HEALTH_RECOVERY_LIMIT {
+            return RecoveryGate::Exhausted;
+        }
+        state.count += 1;
+        state.last_at = Some(now);
+        RecoveryGate::Allowed
+    }
+
+    fn health_notice_due(&self) -> bool {
+        let mut last = self
+            .health_notice_at
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        if let Some(at) = *last {
+            if now.duration_since(at) < HEALTH_RECOVERY_COOLDOWN {
+                return false;
+            }
+        }
+        *last = Some(now);
+        true
+    }
+
+    fn on_health_issue(self: &Arc<Self>, issue: HealthIssue) {
+        if self.reconnecting.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let engine = self.clone();
+        tokio::spawn(async move {
+            let _guard = ReconnectGuard(&engine.reconnecting);
+            engine.recover_data_plane(issue).await;
+        });
     }
 
     /// 用户提交验证码，唤醒等待中的登录流程
@@ -1171,6 +1288,7 @@ impl Engine {
 
         // 统计推送
         let stats_task = spawn_stats(Arc::downgrade(self), cancel.clone());
+        let health_task = spawn_health(Arc::downgrade(self), cancel.clone());
 
         {
             let mut inner = self.lock();
@@ -1182,6 +1300,7 @@ impl Engine {
             inner.uplink_task = Some(uplink_task);
             inner.tunnel_task = Some(tunnel_task);
             inner.stats_task = Some(stats_task);
+            inner.health_task = Some(health_task);
             inner.started_at = Some(Instant::now());
         }
 
@@ -1223,7 +1342,17 @@ impl Engine {
     }
 
     async fn teardown(self: &Arc<Self>) -> bool {
-        let (tunnel, net, reader_stop, reader, uplink_task, tunnel_task, stats_task, session) = {
+        let (
+            tunnel,
+            net,
+            reader_stop,
+            reader,
+            uplink_task,
+            tunnel_task,
+            stats_task,
+            health_task,
+            session,
+        ) = {
             let mut inner = self.lock();
             inner.user_disconnect = true;
             inner.cancel.cancel();
@@ -1236,6 +1365,7 @@ impl Engine {
                 inner.uplink_task.take(),
                 inner.tunnel_task.take(),
                 inner.stats_task.take(),
+                inner.health_task.take(),
                 inner.session.clone(),
             )
         };
@@ -1250,6 +1380,10 @@ impl Engine {
             let _ = task.await;
         }
         if let Some(task) = stats_task {
+            task.abort();
+            let _ = task.await;
+        }
+        if let Some(task) = health_task {
             task.abort();
             let _ = task.await;
         }
@@ -1368,9 +1502,16 @@ impl Engine {
             self.log(format!("第 {attempt}/{MAX_RECONNECT} 次重连尝试"));
 
             match self.reopen_tunnel(&session, &cancel).await {
-                Ok(()) => {
-                    self.log("隧道已恢复");
-                    return;
+                Ok(generation) => {
+                    if self
+                        .verify_data_plane(generation, HEALTH_VERIFY_TIMEOUT)
+                        .await
+                    {
+                        self.log("隧道已恢复");
+                        return;
+                    }
+                    self.log("新隧道已建立，但数据面未恢复");
+                    self.set_phase(Phase::Reconnecting, "数据面未恢复，继续重试");
                 }
                 Err(err) => self.log(format!("重连失败：{err}")),
             }
@@ -1378,6 +1519,139 @@ impl Engine {
 
         self.log("重连次数已用尽，已断开连接");
         let _ = self.disconnect().await;
+    }
+
+    async fn verify_data_plane(self: &Arc<Self>, generation: u64, timeout: Duration) -> bool {
+        let Some(baseline) = self.health_sample() else {
+            return false;
+        };
+        if baseline.generation != generation {
+            return false;
+        }
+        let started = Instant::now();
+        let mut saw_uplink = false;
+        loop {
+            if started.elapsed() >= timeout {
+                return !saw_uplink;
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            if self.lock().cancel.is_cancelled() {
+                return false;
+            }
+            let Some(sample) = self.health_sample() else {
+                return false;
+            };
+            if sample.generation != generation {
+                return false;
+            }
+            if sample.packets_down > baseline.packets_down {
+                return true;
+            }
+            if sample.packets_in > baseline.packets_in {
+                saw_uplink = true;
+            }
+        }
+    }
+
+    async fn recover_data_plane(self: &Arc<Self>, issue: HealthIssue) {
+        if !self.is_connected() {
+            return;
+        }
+        if let Some(sample) = self.health_sample() {
+            self.log(format!(
+                "数据面计数：TUN 收 {} / 发 {}，隧道上行 {} / 下行 {}，上行丢弃 {}，TCP/ICMP 上行 {}/{}",
+                sample.packets_in,
+                sample.packets_out,
+                sample.packets_up,
+                sample.packets_down,
+                sample.uplink_drops,
+                sample.tcp_in,
+                sample.icmp_in
+            ));
+        }
+
+        let auto_reconnect = crate::settings::load(&self.app).auto_reconnect;
+        if !auto_reconnect {
+            if self.health_notice_due() {
+                self.log(format!(
+                    "检测到数据面异常（{}），自动重连已关闭",
+                    issue.describe()
+                ));
+                self.set_phase(Phase::Connected, "数据面异常，请断开重连");
+            }
+            return;
+        }
+
+        match self.begin_health_recovery() {
+            RecoveryGate::Allowed => {}
+            RecoveryGate::Cooling => {
+                self.log("数据面异常仍在恢复冷却期，暂不重复重连");
+                return;
+            }
+            RecoveryGate::Exhausted => {
+                self.log(format!(
+                    "数据面异常反复出现，已停止自动恢复：{HEALTH_FAIL_MESSAGE}"
+                ));
+                self.fail_data_plane().await;
+                return;
+            }
+        }
+
+        self.log(format!(
+            "检测到数据面异常：{}，开始恢复隧道",
+            issue.describe()
+        ));
+        self.set_phase(Phase::Reconnecting, "数据面异常，正在恢复");
+
+        let cancel = { self.lock().cancel.clone() };
+        for attempt in 1..=HEALTH_RECONNECT_MAX {
+            if cancel.is_cancelled() {
+                return;
+            }
+            let wait = Duration::from_secs(1u64 << (attempt - 1));
+            tokio::time::sleep(wait).await;
+            if cancel.is_cancelled() {
+                return;
+            }
+
+            let session = { self.lock().session.clone() };
+            let Some(session) = session else { return };
+
+            self.log(format!(
+                "数据面恢复第 {attempt}/{HEALTH_RECONNECT_MAX} 次尝试"
+            ));
+            match self.reopen_tunnel(&session, &cancel).await {
+                Ok(generation) => {
+                    if self
+                        .verify_data_plane(generation, HEALTH_VERIFY_TIMEOUT)
+                        .await
+                    {
+                        self.log("数据面已恢复");
+                        self.set_phase(Phase::Connected, "");
+                        return;
+                    }
+                    self.log("新隧道已建立，但数据面未恢复");
+                    self.set_phase(Phase::Reconnecting, "数据面未恢复，继续重试");
+                }
+                Err(err) => self.log(format!("数据面恢复失败：{err}")),
+            }
+        }
+
+        self.log(format!("数据面恢复失败：{HEALTH_FAIL_MESSAGE}"));
+        self.fail_data_plane().await;
+    }
+
+    async fn fail_data_plane(self: &Arc<Self>) {
+        let cleanup_ok = self.teardown().await;
+        if cleanup_ok {
+            self.log("已断开并恢复网络配置");
+        } else {
+            self.log("已断开（部分网络配置未恢复，详见上方日志）");
+        }
+        self.set_phase(Phase::Failed, HEALTH_FAIL_MESSAGE.to_string());
+        self.emit(EngineEvent::Error {
+            message: HEALTH_FAIL_MESSAGE.to_string(),
+        });
     }
 
     async fn repair_network(
@@ -1514,7 +1788,7 @@ impl Engine {
         self: &Arc<Self>,
         session: &LoginSession,
         cancel: &CancellationToken,
-    ) -> Result<(), String> {
+    ) -> Result<u64, String> {
         let tun = { self.lock().tun.clone() };
         let Some(tun) = tun else {
             return Err("虚拟网卡已释放".to_string());
@@ -1565,7 +1839,7 @@ impl Engine {
             self.set_phase(Phase::Reconnecting, "正在重连");
             return Err("新隧道建立后立即断开".to_string());
         }
-        Ok(())
+        Ok(generation)
     }
 }
 
@@ -1619,6 +1893,7 @@ fn spawn_uplink(
                 packet = up_rx.recv() => {
                     let Some(packet) = packet else { return };
                     let Some(engine) = engine.upgrade() else { return };
+                    engine.note_uplink_packet(&packet);
                     let tunnel = { engine.lock().tunnel.clone() };
                     if let Some(tunnel) = tunnel {
                         if !tunnel.send_packet(packet) {
@@ -1640,6 +1915,28 @@ fn spawn_stats(engine: std::sync::Weak<Engine>, cancel: CancellationToken) -> Jo
                     let Some(engine) = engine.upgrade() else { return };
                     let stats = engine.snapshot();
                     engine.emit(EngineEvent::Stats { stats });
+                }
+            }
+        }
+    })
+}
+
+fn spawn_health(engine: std::sync::Weak<Engine>, cancel: CancellationToken) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let started = Instant::now();
+        let mut tracker = HealthTracker::new();
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => return,
+                _ = tokio::time::sleep(Duration::from_secs(1)) => {
+                    let Some(engine) = engine.upgrade() else { return };
+                    if engine.lock().phase != Phase::Connected {
+                        continue;
+                    }
+                    let Some(sample) = engine.health_sample() else { continue };
+                    if let Some(issue) = tracker.observe(started.elapsed(), sample) {
+                        engine.on_health_issue(issue);
+                    }
                 }
             }
         }
@@ -1679,6 +1976,18 @@ fn summary(session: &LoginSession) -> SessionSummary {
             })
             .collect(),
     }
+}
+
+/// 读取 IPv4 头的协议字段；非 IPv4 或长度不足时返回 None
+fn ipv4_protocol(packet: &[u8]) -> Option<u8> {
+    if packet.len() < 20 || packet[0] >> 4 != 4 {
+        return None;
+    }
+    let header_len = usize::from(packet[0] & 0x0f) * 4;
+    if header_len < 20 || packet.len() < header_len {
+        return None;
+    }
+    Some(packet[9])
 }
 
 /// 组装候选线路：优先使用 profiles 地址列表，否则回退到表单中的网关
@@ -1848,5 +2157,24 @@ mod tests {
 
         session.gateway_ip = Some("vpn.example.com".to_string());
         assert_eq!(cached_gateway_ip(&session), None);
+    }
+
+    #[test]
+    fn 解析_ipv4_协议字段() {
+        let mut tcp = vec![0u8; 20];
+        tcp[0] = 0x45;
+        tcp[9] = 6;
+        assert_eq!(ipv4_protocol(&tcp), Some(6));
+
+        let mut icmp = vec![0u8; 20];
+        icmp[0] = 0x45;
+        icmp[9] = 1;
+        assert_eq!(ipv4_protocol(&icmp), Some(1));
+
+        let mut ipv6 = vec![0u8; 40];
+        ipv6[0] = 0x60;
+        assert_eq!(ipv4_protocol(&ipv6), None);
+
+        assert_eq!(ipv4_protocol(&[0x45, 0, 0]), None);
     }
 }
