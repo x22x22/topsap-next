@@ -455,6 +455,20 @@ impl Engine {
         true
     }
 
+    fn reset_health_state(&self) {
+        let mut state = self
+            .health_recovery
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        *state = HealthRecoveryState::default();
+        *self
+            .health_notice_at
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = None;
+        self.health_tcp_in.store(0, Ordering::Relaxed);
+        self.health_icmp_in.store(0, Ordering::Relaxed);
+    }
+
     fn on_health_issue(self: &Arc<Self>, issue: HealthIssue) {
         if self.reconnecting.swap(true, Ordering::SeqCst) {
             return;
@@ -1132,6 +1146,7 @@ impl Engine {
         session: &LoginSession,
         cancel: &CancellationToken,
     ) -> Result<(), String> {
+        self.reset_health_state();
         self.set_phase(Phase::Configuring, "正在检查路由冲突");
         let conflicts = crate::netcfg::route_conflicts(&session.routes).await;
         let takeover = if conflicts.is_empty() {
