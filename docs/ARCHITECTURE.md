@@ -225,7 +225,7 @@ TopSAP-Next/
 │       ├── tun/{mod,ffi,device,unix,selftest}.rs
 │       ├── netcfg/{mod,macos_text,macos_networksetup,routes,hosts,shell,unix}.rs
 │       ├── netcfg/windows/{mod,address}.rs
-│       ├── session/{mod,engine,state}.rs
+│       ├── session/{mod,engine,health,state}.rs
 │       └── commands/{mod,app,conn,diag,profiles,settings}.rs
 ├── docs/
 │   ├── ARCHITECTURE.md
@@ -322,7 +322,7 @@ TLS 建连（不校验证书、不发 SNI）
 | `tunnel` | TLS 长连接、握手状态机、上下行计数 | `Tunnel`, `TunnelEvent`, `NoVerifyVerifier` |
 | `tun` | wintun FFI 绑定、Unix 非阻塞 TUN、读循环、写包、自检与残留清理 | `WintunApi`, `TunDevice`, `SelfTestReport` |
 | `netcfg` | 网卡地址、路由注入/回读、DNS、旧版 hosts 残留清理 | `NetConfig`, `RouteEntry`, `CleanupLedger` |
-| `session` | 生命周期编排、事件广播、自动重连 | `Engine`, `EngineState`, `EngineEvent` |
+| `session` | 生命周期编排、事件广播、自动重连、数据面健康检查与自愈 | `Engine`, `EngineState`, `EngineEvent`, `HealthTracker` |
 | `platform` | 运行环境探测，区分 Windows 7 与较新系统 | `is_windows7()` |
 | `update` | 版本检查、流式下载、Windows/macOS 安装编排与更新临时目录清理 | `UpdateInfo`, `UpdateProgress`, `check()` |
 | `settings` | 应用设置读写与校验 | `AppSettings` |
@@ -455,6 +455,20 @@ Linux 不安装特权 helper，`is_elevated()` 直接判断 `geteuid() == 0`：
 - `EPERM` 与 `EBUSY` 分开映射：前者提示需要 root，后者提示同名 `topsap0` 被占用并给出清理命令。
 
 完整的 polkit / root helper 方案（GUI 保持普通用户）仍属于后续改造项。
+
+### 7.9 数据面健康检查与自愈
+
+`session/health.rs` 只看链路是否持续可用，不把界面上的单项字节数当作判据：
+
+- 每 15 秒一个窗口，观察 `TUN 收包 → 隧道上行 → 隧道下行 → 网卡投递` 四段增量；
+- 上行卡死：TUN 持续收包但隧道上行包数不增长，或上行队列丢弃快速增长，连续 3 个窗口判定；
+- 下行静默：存在 TCP/ICMP 上行但隧道下行持续为 0，连续 4 个窗口判定；纯 UDP 单向流量不触发；
+- 下行投递失败：隧道已收到下行但网卡注入失败且丢弃增长，连续 3 个窗口判定；
+- 连接/重连后 30 秒宽限期，隧道代际变化时重置基线；空闲时不做判定；
+- 命中后由 `Engine` 执行隧道级重连（复用 `session_id`），重连后最多观察 10 秒，确认有下行响应才认为恢复；
+- 90 秒冷却、10 分钟最多 3 次健康恢复；连续 3 次恢复失败则断开并提示「网关未恢复数据转发，请重新登录」。
+
+底层配合：TLS socket 开启 keepalive（空闲 30 秒、间隔 5 秒、3 次探测）；隧道写线程 15 秒超时并在失败/超时后发送 `TunnelEvent::Closed`，让现有重连逻辑接管。
 
 ---
 
@@ -609,4 +623,5 @@ cargo test --lib
 | 配置存储 | safeStorage | keyring + AES-GCM 回退 |
 | 异常退出 | 残留 28 条路由 | 会话标记 + 下次启动补注销；本地网卡/路由随句柄回收 |
 | 自动重连 | 无 | 指数退避，最多 5 次；优先复用登录缓存的网关 IP，重连后复核并补配地址、路由与 DNS |
+| 数据面健康 | 无 | 15 秒窗口观察 TUN 收包/隧道上下行/网卡投递；单向静默或上行卡死时隧道级自愈，重连后验证双向流量，连续 3 次失败断开并提示重新登录 |
 | 托盘 | 无 | 有 |
