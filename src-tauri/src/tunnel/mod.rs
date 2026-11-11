@@ -26,6 +26,7 @@ use crate::protocol::{self, Frame, FrameParser, MSG_ACK, MSG_DATA};
 use crate::tls;
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
+const WRITE_TIMEOUT: Duration = Duration::from_secs(15);
 const OUTBOUND_QUEUE: usize = 512;
 pub const EVENT_QUEUE: usize = 2048;
 
@@ -158,6 +159,7 @@ async fn finish_open(
     spawn_writer(
         write_half,
         outbound_rx,
+        events.clone(),
         cancel.clone(),
         bytes_up.clone(),
         packets_up.clone(),
@@ -308,6 +310,7 @@ async fn handle_frame(
 fn spawn_writer(
     mut write_half: tokio::io::WriteHalf<TlsStream<TcpStream>>,
     mut outbound: mpsc::Receiver<Vec<u8>>,
+    events: mpsc::Sender<TunnelEvent>,
     cancel: CancellationToken,
     bytes_up: Arc<AtomicU64>,
     packets_up: Arc<AtomicU64>,
@@ -319,14 +322,29 @@ fn spawn_writer(
                 packet = outbound.recv() => {
                     let Some(packet) = packet else { return };
                     let frame = protocol::build_data_frame(&packet);
-                    if write_half.write_all(&frame).await.is_err() {
-                        return;
+                    let result = tokio::select! {
+                        _ = cancel.cancelled() => return,
+                        result = tokio::time::timeout(WRITE_TIMEOUT, async {
+                            write_half.write_all(&frame).await?;
+                            write_half.flush().await
+                        }) => result,
+                    };
+                    match result {
+                        Ok(Ok(())) => {
+                            bytes_up.fetch_add(packet.len() as u64, Ordering::Relaxed);
+                            packets_up.fetch_add(1, Ordering::Relaxed);
+                        }
+                        Ok(Err(err)) => {
+                            let reason = format!("写入隧道失败：{err}");
+                            let _ = events.send(TunnelEvent::Closed { reason }).await;
+                            return;
+                        }
+                        Err(_) => {
+                            let reason = format!("写入隧道超时（{} 秒）", WRITE_TIMEOUT.as_secs());
+                            let _ = events.send(TunnelEvent::Closed { reason }).await;
+                            return;
+                        }
                     }
-                    if write_half.flush().await.is_err() {
-                        return;
-                    }
-                    bytes_up.fetch_add(packet.len() as u64, Ordering::Relaxed);
-                    packets_up.fetch_add(1, Ordering::Relaxed);
                 }
             }
         }

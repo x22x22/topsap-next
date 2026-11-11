@@ -13,9 +13,15 @@ use std::time::Duration;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{ClientConfig, DigitallySignedStruct, SignatureScheme};
+use socket2::{SockRef, TcpKeepalive};
 use tokio::net::TcpStream;
 use tokio_rustls::client::TlsStream;
 use tokio_rustls::TlsConnector;
+
+const KEEPALIVE_IDLE: Duration = Duration::from_secs(30);
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(5);
+#[cfg(unix)]
+const KEEPALIVE_RETRIES: u32 = 3;
 
 #[derive(Debug, thiserror::Error)]
 pub enum TlsError {
@@ -179,6 +185,7 @@ pub async fn connect_ip(ip: IpAddr, port: u16) -> Result<TlsStream<TcpStream>, T
     })?;
     // 隧道承载交互式流量，禁用 Nagle 减少小包延迟
     let _ = tcp.set_nodelay(true);
+    apply_keepalive(&tcp);
 
     let server_name = ServerName::IpAddress(ip.into());
     let connector = TlsConnector::from(client_config());
@@ -186,6 +193,20 @@ pub async fn connect_ip(ip: IpAddr, port: u16) -> Result<TlsStream<TcpStream>, T
         .connect(server_name, tcp)
         .await
         .map_err(|e| TlsError::Handshake(describe_handshake_error(&e)))
+}
+
+/// 开启 TCP keepalive：半开连接或 NAT 映射失效时由内核探测并报错
+fn apply_keepalive(tcp: &TcpStream) {
+    #[cfg(unix)]
+    let keepalive = TcpKeepalive::new()
+        .with_time(KEEPALIVE_IDLE)
+        .with_interval(KEEPALIVE_INTERVAL)
+        .with_retries(KEEPALIVE_RETRIES);
+    #[cfg(not(unix))]
+    let keepalive = TcpKeepalive::new()
+        .with_time(KEEPALIVE_IDLE)
+        .with_interval(KEEPALIVE_INTERVAL);
+    let _ = SockRef::from(tcp).set_tcp_keepalive(&keepalive);
 }
 
 /// 把系统 DNS 错误归一成可读原因，避免展示本地化的「不知道这样的主机」
@@ -269,5 +290,19 @@ mod tests {
             .await
             .expect("IP literal should resolve");
         assert_eq!(ip, "198.51.100.10".parse::<IpAddr>().unwrap());
+    }
+
+    #[tokio::test]
+    async fn 已连接套接字可设置_keepalive() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let accept = tokio::spawn(async move {
+            let _ = listener.accept().await;
+        });
+        let tcp = TcpStream::connect(addr).await.expect("connect");
+        apply_keepalive(&tcp);
+        accept.abort();
     }
 }
