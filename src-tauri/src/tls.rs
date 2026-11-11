@@ -185,7 +185,7 @@ pub async fn connect_ip(ip: IpAddr, port: u16) -> Result<TlsStream<TcpStream>, T
     })?;
     // 隧道承载交互式流量，禁用 Nagle 减少小包延迟
     let _ = tcp.set_nodelay(true);
-    apply_keepalive(&tcp);
+    let _ = apply_keepalive(&tcp);
 
     let server_name = ServerName::IpAddress(ip.into());
     let connector = TlsConnector::from(client_config());
@@ -196,7 +196,7 @@ pub async fn connect_ip(ip: IpAddr, port: u16) -> Result<TlsStream<TcpStream>, T
 }
 
 /// 开启 TCP keepalive：半开连接或 NAT 映射失效时由内核探测并报错
-fn apply_keepalive(tcp: &TcpStream) {
+fn apply_keepalive(tcp: &TcpStream) -> std::io::Result<()> {
     #[cfg(unix)]
     let keepalive = TcpKeepalive::new()
         .with_time(KEEPALIVE_IDLE)
@@ -206,7 +206,7 @@ fn apply_keepalive(tcp: &TcpStream) {
     let keepalive = TcpKeepalive::new()
         .with_time(KEEPALIVE_IDLE)
         .with_interval(KEEPALIVE_INTERVAL);
-    let _ = SockRef::from(tcp).set_tcp_keepalive(&keepalive);
+    SockRef::from(tcp).set_tcp_keepalive(&keepalive)
 }
 
 /// 把系统 DNS 错误归一成可读原因，避免展示本地化的「不知道这样的主机」
@@ -302,7 +302,7 @@ mod tests {
             let _ = listener.accept().await;
         });
         let tcp = TcpStream::connect(addr).await.expect("connect");
-        apply_keepalive(&tcp);
+        assert!(apply_keepalive(&tcp).is_ok());
         accept.abort();
     }
 }
