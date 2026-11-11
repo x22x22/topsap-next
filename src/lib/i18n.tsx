@@ -530,6 +530,13 @@ const EN: Record<string, string> = {
   "隧道类型": "Tunnel type",
   "连接时间": "Connected for",
   "收发数据": "Sent / received",
+  "收发数据（上行 / 下行）": "Traffic (up / down)",
+  "数据面异常，请断开重连": "The data plane is degraded. Disconnect and reconnect.",
+  "数据面异常，正在恢复": "The data plane is degraded; recovering",
+  "数据面未恢复，继续重试": "The data plane has not recovered; retrying",
+  "网关未恢复数据转发，请重新登录":
+    "The gateway is not forwarding data. Please sign in again.",
+  "请检查错误日志后重试": "Check the error log and try again",
   "透明访问": "Transparent proxy",
   "网络隔离": "Network isolation",
   "网络完全代理": "Full proxy",

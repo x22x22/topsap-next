@@ -74,11 +74,17 @@ export function StatusHero({
               </span>
             </div>
             <h2 className="mt-1 text-xl font-semibold tracking-tight">{t(label)}</h2>
-            {failed ? null : (
-              <p className="mt-1 min-h-4 text-xs text-muted">
-                {detail ? t(detail) : t(connected ? "内网流量已进入隧道" : "填写网关信息后开始连接")}
-              </p>
-            )}
+            <p className="mt-1 min-h-4 text-xs text-muted">
+              {detail
+                ? t(detail)
+                : t(
+                    failed
+                      ? "请检查错误日志后重试"
+                      : connected
+                        ? "内网流量已进入隧道"
+                        : "填写网关信息后开始连接",
+                  )}
+            </p>
           </div>
         </div>
 

@@ -297,7 +297,11 @@ export function ConnectPage({
             </div>
           </Card>
           <ResourceListCard resources={session?.resources ?? []} />
-          <BasicInfoCard session={session} stats={engine.stats} />
+          <BasicInfoCard
+            session={session}
+            stats={engine.stats}
+            detail={engine.detail}
+          />
           <TrafficChartCard stats={engine.stats} />
           <LoginInfoCard session={session} />
         </>

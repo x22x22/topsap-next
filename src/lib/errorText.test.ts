@@ -37,6 +37,12 @@ describe("localizeError", () => {
     );
   });
 
+  it("翻译数据面恢复失败提示", () => {
+    expect(localizeError("网关未恢复数据转发，请重新登录")).toBe(
+      "The gateway is not forwarding data. Please sign in again.",
+    );
+  });
+
   it("翻译登录时要求改密的提示", () => {
     expect(localizeError("登录用户密码有效期已到，请修改密码")).toBe(
       "Your password has expired. Change it to continue.",

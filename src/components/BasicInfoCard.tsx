@@ -6,9 +6,11 @@ import type { SessionSummary, Stats } from "../types/engine";
 export function BasicInfoCard({
   session,
   stats,
+  detail,
 }: {
   session: SessionSummary | null;
   stats: Stats;
+  detail?: string;
 }) {
   const { t } = useI18n();
   const tunnelLabel: Record<number, string> = {
@@ -34,14 +36,18 @@ export function BasicInfoCard({
           label={t("网关版本")}
           value={session?.gateway_version || "—"}
         />
-        <InfoRow label={t("工作状态")} value={t("隧道建立成功")} />
+        <InfoRow
+          label={t("工作状态")}
+          value={detail ? t(detail) : t("隧道建立成功")}
+          tone={detail ? "warning" : "default"}
+        />
         <InfoRow label={t("隧道类型")} value={tunnelType} />
         <InfoRow
           label={t("连接时间")}
           value={formatDuration(stats.duration_secs)}
         />
         <InfoRow
-          label={t("收发数据")}
+          label={t("收发数据（上行 / 下行）")}
           value={`${formatBytes(stats.bytes_up)} / ${formatBytes(stats.bytes_down)}`}
         />
       </dl>
@@ -49,11 +55,23 @@ export function BasicInfoCard({
   );
 }
 
-function InfoRow({ label, value }: { label: string; value: string }) {
+function InfoRow({
+  label,
+  value,
+  tone = "default",
+}: {
+  label: string;
+  value: string;
+  tone?: "default" | "warning";
+}) {
   return (
     <div className="flex items-baseline justify-between gap-4 border-b border-border/60 pb-2 last:border-0 last:pb-0">
       <dt className="shrink-0 text-[11px] text-faint">{label}</dt>
-      <dd className="min-w-0 break-words text-right font-mono text-xs text-text">
+      <dd
+        className={`min-w-0 break-words text-right font-mono text-xs ${
+          tone === "warning" ? "text-danger" : "text-text"
+        }`}
+      >
         {value}
       </dd>
     </div>

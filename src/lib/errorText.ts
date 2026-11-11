@@ -218,6 +218,8 @@ export function localizeError(message: string): string {
       "The gateway service is unavailable (HTTP $1). Retry later or contact the administrator."],
     [/^网关返回异常状态（HTTP (\d+)），请检查网关地址与端口$/,
       "The gateway returned an unexpected status (HTTP $1). Check the gateway address and port."],
+    [/^网关未恢复数据转发，请重新登录$/,
+      "The gateway is not forwarding data. Please sign in again."],
     [/^网关响应异常，请检查网关地址与端口$/, "Unexpected gateway response. Check the gateway address and port."],
     [/^网关返回内容无法识别，请检查网关地址与端口$/,
       "The gateway response could not be recognized. Check the gateway address and port."],
