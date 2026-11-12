@@ -57,7 +57,11 @@ export function normalizeRouteKey(raw: string): string | null {
     const parts = text.split("/");
     if (parts.length !== 2) return null;
     destText = parts[0];
-    prefix = Number(parts[1].trim());
+    // 严格校验十进制前缀：Number("") 为 0、Number("0x18") 为 24、Number("1e1") 为 10，
+    // 都不能被当成合法掩码，规则需与后端 parse::<u8>() 保持一致
+    const prefixText = parts[1].trim();
+    if (!/^\d{1,2}$/.test(prefixText)) return null;
+    prefix = Number(prefixText);
   } else {
     const parts = text.split(/\s+/);
     if (parts.length !== 2) return null;
@@ -99,15 +103,29 @@ export function setRouteEnabled(
   return [...disabled, key];
 }
 
-/** 一次关闭/启用全部路由。 */
-export function setAllRoutes(
+/** 启用当前网关下发的全部路由；列表之外的手动排除项保持不变。 */
+export function enableRoutes(
+  disabled: string[],
   routes: Array<{ dest: string; prefix: number }>,
-  enabled: boolean,
 ): string[] {
-  if (enabled) return [];
-  return routes
-    .slice(0, MAX_DISABLED)
-    .map((route) => routeKey(route.dest, route.prefix));
+  const keys = new Set(routes.map((route) => routeKey(route.dest, route.prefix)));
+  return disabled.filter((item) => !keys.has(item));
+}
+
+/** 关闭当前网关下发的全部路由，与已有的手动排除项合并，不丢弃用户配置。 */
+export function disableRoutes(
+  disabled: string[],
+  routes: Array<{ dest: string; prefix: number }>,
+): { entries: string[]; truncated: boolean } {
+  const merged = new Set(disabled);
+  for (const route of routes) {
+    merged.add(routeKey(route.dest, route.prefix));
+  }
+  const entries = Array.from(merged);
+  return {
+    entries: entries.slice(0, MAX_DISABLED),
+    truncated: entries.length > MAX_DISABLED,
+  };
 }
 
 export const ROUTE_DISABLED_LIMIT = MAX_DISABLED;

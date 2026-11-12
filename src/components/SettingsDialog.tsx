@@ -47,10 +47,11 @@ import { isTauriRuntime } from "../lib/platform";
 import { queryKeys } from "../lib/query";
 import {
   ROUTE_DISABLED_LIMIT,
+  disableRoutes,
+  enableRoutes,
   isRouteEnabled,
   normalizeRouteKey,
   routeKey,
-  setAllRoutes,
   setRouteEnabled,
 } from "../lib/routePolicy";
 import { applyTheme } from "../lib/theme";
@@ -283,6 +284,7 @@ export function SettingsDialog({
   const routeEnabledCount = routeRules.filter((rule) =>
     isRouteEnabled(disabledRoutes, rule.dest, rule.prefix),
   ).length;
+  const routeDisabledCount = routeRules.length - routeEnabledCount;
   const routeKeyword = routeQuery.trim().toLowerCase();
   const visibleRouteRules = routeKeyword
     ? routeRules.filter((rule) =>
@@ -332,7 +334,21 @@ export function SettingsDialog({
 
   const setRoutesEnabled = (enabled: boolean) => {
     if (!draft) return;
-    update({ disabled_routes: setAllRoutes(routeRules, enabled) });
+    if (enabled) {
+      // 只启用本次下发的路由，手动排除的网段保持原样
+      update({ disabled_routes: enableRoutes(disabledRoutes, routeRules) });
+      return;
+    }
+    // 全部关闭与已有的手动排除项合并，避免覆盖用户在「手动排除网段」里维护的配置
+    const result = disableRoutes(disabledRoutes, routeRules);
+    if (result.truncated) {
+      toast.info(
+        t("排除网段不能超过 {count} 条，已保留前 {count} 条", {
+          count: ROUTE_DISABLED_LIMIT,
+        }),
+      );
+    }
+    update({ disabled_routes: result.entries });
   };
 
   const changeTheme = (theme: ThemeMode) => {
@@ -689,7 +705,7 @@ export function SettingsDialog({
                             <Button
                               size="sm"
                               onClick={() => setRoutesEnabled(true)}
-                              disabled={routeRules.length === 0 || disabledRoutes.length === 0}
+                              disabled={routeRules.length === 0 || routeDisabledCount === 0}
                             >
                               {t("全部启用")}
                             </Button>
@@ -698,7 +714,7 @@ export function SettingsDialog({
                               onClick={() => setRoutesEnabled(false)}
                               disabled={
                                 routeRules.length === 0 ||
-                                routeEnabledCount === routeRules.length
+                                routeDisabledCount === routeRules.length
                               }
                             >
                               {t("全部关闭")}

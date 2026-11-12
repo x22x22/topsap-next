@@ -304,6 +304,8 @@ const EN: Record<string, string> = {
   "该网段已在排除列表中": "This subnet is already excluded",
   "排除网段不能超过 {count} 条":
     "No more than {count} excluded subnets are allowed",
+  "排除网段不能超过 {count} 条，已保留前 {count} 条":
+    "No more than {count} excluded subnets are allowed; the first {count} were kept",
   "暂无额外排除的网段": "No manually excluded subnets",
   "恢复生效": "Restore",
   "设为默认": "Set as default",

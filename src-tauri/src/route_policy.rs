@@ -176,7 +176,16 @@ fn disabled_set(disabled: &[String]) -> BTreeSet<String> {
 }
 
 fn route_key(route: &RouteEntry) -> String {
-    format!("{}/{}", route.dest, route.prefix)
+    // 统一按「网络地址/前缀」比较：设置页保存的排除项已归一化，这里若直接用原始
+    // 目的地址（例如 198.51.100.5/24），会出现排除项对不上、被排除网段仍被注入的问题
+    match parse_ipv4(&route.dest) {
+        Some(dest) if route.prefix <= 32 => format!(
+            "{}/{}",
+            format_ipv4(network_address(dest, route.prefix)),
+            route.prefix
+        ),
+        _ => format!("{}/{}", route.dest, route.prefix),
+    }
 }
 
 /// 按关闭列表过滤路由；返回仍需要注入的路由。
@@ -370,6 +379,19 @@ mod tests {
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].dest, "10.0.0.0");
         assert_eq!(kept[0].prefix, 8);
+    }
+
+    #[test]
+    fn 过滤路由_原始目的地址未归一化也能匹配排除项() {
+        // 网关侧可能给出 198.51.100.5/24 这种非网络地址形式，排除项保存的是
+        // 198.51.100.0/24，两者必须被视为同一条路由
+        let routes = vec![RouteEntry {
+            dest: "198.51.100.5".to_string(),
+            mask: "255.255.255.0".to_string(),
+            prefix: 24,
+        }];
+        let kept = filter_routes(&routes, &["198.51.100.0/24".to_string()]);
+        assert!(kept.is_empty());
     }
 
     #[test]
