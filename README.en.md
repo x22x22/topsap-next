@@ -61,7 +61,8 @@ Credentials stay on your machine (system secure storage first: Windows Credentia
 - **Change password** — While connected, change the current account password with the old password, new password and confirmation. If login returns expired/weak/first-login/admin-required password status, a standalone change-password dialog is shown. After a successful change the session is logged out, the new password is filled into the login form, and the next successful login toast says so.
 - **Password visibility** — Every password field has a fixed show/hide button on the right and hides the WebView's built-in conditional eye icon.
 - **Proxy bypass** — The settings window manages a domain/wildcard/IP bypass list, preloaded with `*.sunline.cn` and `*.sunline-i.com`. Windows uses `ProxyOverride`, macOS writes per-service lists through `networksetup`, and Linux uses GNOME `gsettings ignore-hosts`. Entries bypass the local proxy in both rule and global system-proxy modes. Only apps that use the system proxy are affected; TUN/transparent proxies are not covered.
-- **Tray and single instance** — Closing the window minimizes to tray by default and keeps the connection; launching again never creates a second instance.
+- **Route scope** — The settings window lists every tunnel route pushed by the gateway after sign-in (ACL targets plus portal resource subnets). Each route can be toggled individually, enabled all at once or disabled all at once, and subnets the gateway did not push can be excluded manually (`10.0.0.0/8` or `10.0.0.0 255.0.0.0`). Unchecked subnets are not written into the system routing table and are skipped by route-conflict checks and automatic reconnect recovery. Every sign-in caches the full route list in the config directory, so it stays editable while disconnected. Changes apply to the next connection.
+- **Tray and single instance** — Closing the window minimizes to tray by default and keeps the connection; with “Minimize to tray on close” turned off, closing the window quits the app and removes both Dock and tray icons. Launching again never creates a second instance. On macOS you can also enable “Hide Dock icon when the window is closed” to keep only the menu bar tray; while the Dock icon is kept, clicking it brings the window back.
 - **Chinese / English UI** — Toggle languages from the header; the choice is saved locally and can follow the system. Theme, language and profile changes apply immediately in the Settings window.
 - **Remember password** — Stored in system secure storage first (Windows Credential Manager / macOS Keychain / Linux Secret Service); falls back to a machine-bound AES-256-GCM file.
 - **Light/dark theme and collapsible sidebar** — Toggle themes from the header (preference remembered); collapse the sidebar to icons, with all notices shown as top toasts.
@@ -336,6 +337,7 @@ topsap-next/
 
 | Version | Release date | Changelog |
 | --- | --- | --- |
+| v1.5.0 | 2026-11-13 | [verchanglog/v1.5.0.md](verchanglog/v1.5.0.md) |
 | v1.4.3 | 2026-11-11 | [verchanglog/v1.4.3.md](verchanglog/v1.4.3.md) |
 | v1.4.2 | 2026-11-10 | [verchanglog/v1.4.2.md](verchanglog/v1.4.2.md) |
 | v1.4.1 | 2026-11-07 | [verchanglog/v1.4.1.md](verchanglog/v1.4.1.md) |

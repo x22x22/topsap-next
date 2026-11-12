@@ -61,7 +61,8 @@ TopSAP Client 用 Tauri 2 重写了整条链路：登录、隧道、虚拟网卡
 - **修改密码** — 连接成功后可在当前账号旁修改密码，需输入原密码、新密码与确认密码；登录返回密码到期/过弱/首登/管理员要求时，也会弹出无会话改密窗口。改密成功后自动注销，新密码自动填入登录框，重新登录提示会注明这一点。
 - **密码可见切换** — 所有密码框右侧提供固定的显示/隐藏按钮，并隐藏 WebView 自带的条件眼睛图标。
 - **代理绕过** — 设置窗口可维护域名/泛域名/IP 绕过列表，默认写入 `*.sunline.cn` 与 `*.sunline-i.com`；Windows 使用 `ProxyOverride`，macOS 使用 `networksetup` 逐网络服务写入，Linux 使用 GNOME `gsettings ignore-hosts`。规则/全局系统代理模式下访问这些地址都不走代理；仅对使用系统代理的程序有效，TUN/透明代理模式无法覆盖。
-- **系统托盘与单实例** — 关闭窗口默认最小化到托盘，连接保持；重复启动不会产生第二个实例。
+- **路由生效范围** — 设置窗口列出登录后网关下发的全部隧道路由（ACL 目标 + 门户资源网段），可逐条勾选、全部启用或全部关闭，也可手动添加网关未下发但需要排除的网段（`10.0.0.0/8` 或 `10.0.0.0 255.0.0.0`）。取消勾选的网段不写入系统路由表，也不参与路由冲突检测与自动重连恢复；每次登录会把完整路由缓存到配置目录，未登录时仍可调整。修改对下一次连接生效。
+- **系统托盘与单实例** — 关闭窗口默认最小化到托盘，连接保持；关闭「最小化到托盘」后，关闭窗口即退出程序（Dock 与托盘图标一并消失）。重复启动不会产生第二个实例。macOS 下可再开启「关闭窗口后隐藏 Dock 图标」，只保留菜单栏托盘；保留 Dock 时点击 Dock 图标可重新唤出窗口。
 - **中英文界面** — 顶栏一键切换中文 / English，语言偏好本地保存并支持跟随系统；设置窗口中的主题、语言与连接配置更改即时生效。
 - **记住密码** — 优先写入系统安全存储（Windows 凭据管理器 / macOS 钥匙串 / Linux Secret Service）；不可用时回退为机器标识派生密钥的 AES-256-GCM 文件。
 - **深浅色主题与可折叠侧栏** — 顶栏一键切换深浅色（记忆偏好）；侧栏可收起为图标模式，操作提示统一以顶部 toast 展示。
@@ -305,7 +306,7 @@ topsap-next/
 │   │   ├── platform.rs         运行环境探测（Windows 7 兼容分支）
 │   │   ├── tls.rs              统一 TLS 配置
 │   │   ├── update/{mod,download,install}.rs  版本检查、更新下载与多平台安装
-│   │   ├── dto.rs / settings.rs / secret_store.rs / proxy_bypass.rs
+│   │   ├── dto.rs / settings.rs / secret_store.rs / proxy_bypass.rs / route_policy.rs
 │   │   ├── helper.rs            macOS root helper（TUN 创建与白名单命令）
 │   │   ├── privileged.rs        macOS helper 客户端与 LaunchDaemon 安装
 │   │   ├── session_guard.rs     异常退出会话标记与下次启动补注销
@@ -336,6 +337,7 @@ topsap-next/
 
 | 版本 | 发布日期 | 更新日志 |
 | --- | --- | --- |
+| v1.5.0 | 2026-11-13 | [verchanglog/v1.5.0.md](verchanglog/v1.5.0.md) |
 | v1.4.3 | 2026-11-11 | [verchanglog/v1.4.3.md](verchanglog/v1.4.3.md) |
 | v1.4.2 | 2026-11-10 | [verchanglog/v1.4.2.md](verchanglog/v1.4.2.md) |
 | v1.4.1 | 2026-11-07 | [verchanglog/v1.4.1.md](verchanglog/v1.4.1.md) |

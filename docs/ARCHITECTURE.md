@@ -213,6 +213,7 @@ TopSAP-Next/
 │       ├── settings.rs
 │       ├── profiles.rs          # 连接配置存储与导入导出
 │       ├── proxy_bypass.rs      # 三平台系统代理绕过列表
+│       ├── route_policy.rs      # 隧道路由生效范围与路由缓存
 │       ├── secret_store.rs
 │       ├── helper.rs            # macOS root helper：TUN 创建与白名单命令
 │       ├── privileged.rs        # macOS helper 客户端与 LaunchDaemon 安装
@@ -327,6 +328,7 @@ TLS 建连（不校验证书、不发 SNI）
 | `update` | 版本检查、流式下载、Windows/macOS 安装编排与更新临时目录清理 | `UpdateInfo`, `UpdateProgress`, `check()` |
 | `settings` | 应用设置读写与校验 | `AppSettings` |
 | `proxy_bypass` | Windows / macOS / Linux 系统代理绕过列表同步；macOS 经 helper 执行 `networksetup` | `ProxyBypassStatus` |
+| `route_policy` | 隧道路由生效范围：网段归一化、关闭列表清洗、注入前过滤；每次登录缓存完整路由供离线勾选 | `RouteRuleDto`, `RoutePolicySnapshot` |
 | `secret_store` | 跨平台 keyring（Windows 凭据管理器 / macOS 钥匙串 / Linux Secret Service）+ AES-GCM 回退 | `SecretStore` |
 | `helper` | macOS root LaunchDaemon：创建 utun、执行 ifconfig/route 白名单命令 | `helper::run()` |
 | `privileged` | macOS helper 客户端、LaunchDaemon 安装与版本探活 | `ensure_helper()`, `create_tun()`, `run()` |
