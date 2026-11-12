@@ -25,3 +25,6 @@ temp/
 # 文档
 AGENTS.md
 优化.md
+
+# 本地验证产物
+tmp/

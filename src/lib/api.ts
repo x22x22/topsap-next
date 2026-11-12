@@ -13,6 +13,7 @@ import type {
   ProfileStore,
   ProxyBypassStatus,
   ResidueReport,
+  RoutePolicySnapshot,
   SelfTestReport,
   SelfTestStep,
   SessionSummary,
@@ -105,6 +106,7 @@ export const api = {
   loadSettings: () => call<AppSettings>("load_settings"),
   saveSettings: (settings: AppSettings) => call<void>("save_settings", { settings }),
   proxyBypassStatus: () => call<ProxyBypassStatus>("proxy_bypass_status"),
+  routePolicy: () => call<RoutePolicySnapshot>("route_policy"),
   loadPassword: (user: string) => call<string | null>("load_password", { user }),
 
   openLogDir: () => call<string>("open_log_dir"),

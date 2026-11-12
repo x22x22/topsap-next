@@ -12,6 +12,7 @@ import type {
   LoginForm,
   ProxyBypassStatus,
   ResidueReport,
+  RoutePolicySnapshot,
   SelfTestReport,
   SessionSummary,
   Stats,
@@ -204,6 +205,8 @@ async function handle(cmd: string, args?: Record<string, unknown>): Promise<unkn
         theme: "system",
         proxy_bypass_enabled: true,
         proxy_bypass: [...DEFAULT_PROXY_BYPASS],
+        hide_dock_when_closed: false,
+        disabled_routes: ["172.16.0.0/12"],
       } satisfies AppSettings;
 
     case "save_settings":
@@ -218,6 +221,18 @@ async function handle(cmd: string, args?: Record<string, unknown>): Promise<unkn
         applied: true,
         message: "演示模式",
       } satisfies ProxyBypassStatus;
+
+    case "route_policy":
+      return {
+        online: false,
+        source: "cache",
+        routes: [
+          { dest: "10.8.0.0", mask: "255.255.0.0", prefix: 16, enabled: true },
+          { dest: "10.20.0.0", mask: "255.255.0.0", prefix: 16, enabled: true },
+          { dest: "172.16.0.0", mask: "255.240.0.0", prefix: 12, enabled: false },
+          { dest: "192.168.10.0", mask: "255.255.255.0", prefix: 24, enabled: true },
+        ],
+      } satisfies RoutePolicySnapshot;
 
     case "load_password":
       return null;

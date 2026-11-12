@@ -17,6 +17,7 @@ pub mod privileged;
 pub mod profiles;
 pub mod protocol;
 pub mod proxy_bypass;
+pub mod route_policy;
 pub mod secret_store;
 pub mod session;
 pub mod session_guard;
@@ -53,11 +54,7 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             // 二次启动不新建进程，聚焦已有窗口
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.unminimize();
-                let _ = window.set_focus();
-            }
+            reveal_main_window(app);
         }))
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
@@ -85,9 +82,24 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 let app = window.app_handle();
-                if crate::settings::load(app).close_to_tray {
+                let settings = crate::settings::load(app);
+                if settings.close_to_tray {
                     api.prevent_close();
                     let _ = window.hide();
+                    // macOS 可选：关闭窗口后连 Dock 图标一起隐藏，只保留菜单栏托盘
+                    #[cfg(target_os = "macos")]
+                    {
+                        if settings.hide_dock_when_closed {
+                            set_dock_hidden(app, true);
+                        }
+                    }
+                } else {
+                    // 未开启托盘驻留时关闭窗口即退出：否则窗口被销毁、进程仍在，
+                    // Dock/托盘图标点起来却没有任何窗口可唤出，只能去任务管理器结束
+                    let app = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        app.exit(0);
+                    });
                 }
             }
         })
@@ -117,6 +129,7 @@ pub fn run() {
             commands::settings::load_settings,
             commands::settings::save_settings,
             commands::settings::proxy_bypass_status,
+            commands::settings::route_policy,
             commands::settings::load_password,
             commands::profiles::list_connections,
             commands::profiles::save_connection,
@@ -151,6 +164,11 @@ pub fn run() {
             if state.engine.needs_cleanup() {
                 crate::shutdown::quick_disconnect_blocking(&state.engine);
             }
+        }
+        // 点击 Dock 图标（或应用被重新激活）时唤回被隐藏的主窗口
+        #[cfg(target_os = "macos")]
+        RunEvent::Reopen { .. } => {
+            reveal_main_window(app_handle);
         }
         _ => {}
     });
@@ -237,10 +255,7 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
+                reveal_main_window(app);
             }
             "disconnect" => {
                 let engine = app.state::<AppState>().engine.clone();
@@ -257,10 +272,7 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
                 ..
             } = event
             {
-                if let Some(window) = tray.app_handle().get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
+                reveal_main_window(tray.app_handle());
             }
         });
 
@@ -270,3 +282,34 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
     builder.build(app)?;
     Ok(())
 }
+
+/// 把主窗口显示到前台；macOS 上同时恢复 Dock 图标
+fn reveal_main_window(app: &tauri::AppHandle) {
+    #[cfg(target_os = "macos")]
+    set_dock_hidden(app, false);
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+/// macOS：切换 Dock 图标可见性。
+///
+/// 只在状态真正变化时调用系统接口：`TransformProcessType` 在 1 秒内反复切换会
+/// 触发 macOS 留下多个 Dock 图标的已知问题。
+#[cfg(target_os = "macos")]
+fn set_dock_hidden(app: &tauri::AppHandle, hidden: bool) {
+    use std::sync::atomic::Ordering;
+    if DOCK_HIDDEN.swap(hidden, Ordering::SeqCst) == hidden {
+        return;
+    }
+    if let Err(err) = app.set_dock_visibility(!hidden) {
+        DOCK_HIDDEN.store(!hidden, Ordering::SeqCst);
+        log::warn!("切换 Dock 图标显示失败：{err}");
+    }
+}
+
+/// 当前进程是否已隐藏 Dock 图标
+#[cfg(target_os = "macos")]
+static DOCK_HIDDEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);

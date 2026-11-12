@@ -4,10 +4,12 @@ import { open as openFile, save as saveFile } from "@tauri-apps/plugin-dialog";
 import {
   Download,
   Info,
+  Network,
   Palette,
   Pencil,
   Plus,
   RotateCcw,
+  Search,
   Server,
   Settings2,
   ShieldAlert,
@@ -43,10 +45,29 @@ import {
 } from "../lib/proxyBypass";
 import { isTauriRuntime } from "../lib/platform";
 import { queryKeys } from "../lib/query";
+import {
+  ROUTE_DISABLED_LIMIT,
+  isRouteEnabled,
+  normalizeRouteKey,
+  routeKey,
+  setAllRoutes,
+  setRouteEnabled,
+} from "../lib/routePolicy";
 import { applyTheme } from "../lib/theme";
-import type { AppSettings, ConnectionProfile, ThemeMode } from "../types/engine";
+import type {
+  AppSettings,
+  ConnectionProfile,
+  RouteRule,
+  ThemeMode,
+} from "../types/engine";
 
-type SectionId = "general" | "connections" | "proxy" | "appearance" | "about";
+type SectionId =
+  | "general"
+  | "connections"
+  | "proxy"
+  | "routes"
+  | "appearance"
+  | "about";
 
 const MODE_TONE = ["neutral", "accent", "warn"] as const;
 
@@ -74,9 +95,15 @@ export function SettingsDialog({
     queryKey: queryKeys.proxyBypass,
     queryFn: api.proxyBypassStatus,
   });
+  const routePolicyQuery = useQuery({
+    queryKey: queryKeys.routePolicy,
+    queryFn: api.routePolicy,
+  });
 
   const [draft, setDraft] = useState<AppSettings | null>(null);
   const [bypassInput, setBypassInput] = useState("");
+  const [routeInput, setRouteInput] = useState("");
+  const [routeQuery, setRouteQuery] = useState("");
   const [profileOpen, setProfileOpen] = useState(false);
   const [editingProfile, setEditingProfile] = useState<ConnectionProfile | null>(null);
   const [confirmState, setConfirmState] = useState<
@@ -92,7 +119,9 @@ export function SettingsDialog({
   useEffect(() => {
     if (!open) return;
     setSection("general");
-  }, [open]);
+    // 每次打开设置都重新拉取；登录后网关下发的路由会变化
+    void queryClient.invalidateQueries({ queryKey: queryKeys.routePolicy });
+  }, [open, queryClient]);
 
   useEffect(() => {
     if (!open) return;
@@ -193,6 +222,7 @@ export function SettingsDialog({
     { id: "general", label: t("通用"), hint: t("托盘与自动重连"), icon: Settings2 },
     { id: "connections", label: t("连接管理"), hint: t("网关配置与线路"), icon: Server },
     { id: "proxy", label: t("代理绕过"), hint: t("指定域名/IP 不走系统代理"), icon: ShieldOff },
+    { id: "routes", label: t("路由生效范围"), hint: t("勾选哪些隧道路由不生效"), icon: Network },
     { id: "appearance", label: t("外观"), hint: t("深浅色主题与界面语言"), icon: Palette },
     { id: "about", label: t("关于"), hint: t("版本与安全说明"), icon: Info },
   ];
@@ -246,6 +276,63 @@ export function SettingsDialog({
     update({ proxy_bypass: merged }, () =>
       toast.success(t("已恢复默认代理绕过条目")),
     );
+  };
+
+  const routeRules = routePolicyQuery.data?.routes ?? [];
+  const disabledRoutes = draft?.disabled_routes ?? [];
+  const routeEnabledCount = routeRules.filter((rule) =>
+    isRouteEnabled(disabledRoutes, rule.dest, rule.prefix),
+  ).length;
+  const routeKeyword = routeQuery.trim().toLowerCase();
+  const visibleRouteRules = routeKeyword
+    ? routeRules.filter((rule) =>
+        `${rule.dest}/${rule.prefix} ${rule.mask}`.toLowerCase().includes(routeKeyword),
+      )
+    : routeRules;
+  // 手工排除、但本次网关没有下发的网段单独列出，便于撤销
+  const extraDisabledRoutes = disabledRoutes.filter(
+    (key) => !routeRules.some((rule) => routeKey(rule.dest, rule.prefix) === key),
+  );
+  const routeSourceHint = !routePolicyQuery.data
+    ? ""
+    : routePolicyQuery.data.online
+      ? t("当前会话由网关下发的路由")
+      : t("上次登录缓存的网关路由");
+
+  const toggleRouteEnabled = (rule: RouteRule, next: boolean) => {
+    if (!draft) return;
+    update({
+      disabled_routes: setRouteEnabled(disabledRoutes, rule.dest, rule.prefix, next),
+    });
+  };
+
+  const addRouteExclusion = () => {
+    if (!draft) return;
+    const key = normalizeRouteKey(routeInput);
+    if (!key) {
+      toast.error(t("请输入合法的网段，例如 10.0.0.0/8 或 10.0.0.0 255.0.0.0"));
+      return;
+    }
+    if (disabledRoutes.includes(key)) {
+      toast.info(t("该网段已在排除列表中"));
+      return;
+    }
+    if (disabledRoutes.length >= ROUTE_DISABLED_LIMIT) {
+      toast.error(t("排除网段不能超过 {count} 条", { count: ROUTE_DISABLED_LIMIT }));
+      return;
+    }
+    setRouteInput("");
+    update({ disabled_routes: [...disabledRoutes, key] });
+  };
+
+  const removeRouteExclusion = (key: string) => {
+    if (!draft) return;
+    update({ disabled_routes: disabledRoutes.filter((item) => item !== key) });
+  };
+
+  const setRoutesEnabled = (enabled: boolean) => {
+    if (!draft) return;
+    update({ disabled_routes: setAllRoutes(routeRules, enabled) });
   };
 
   const changeTheme = (theme: ThemeMode) => {
@@ -356,6 +443,24 @@ export function SettingsDialog({
                             />
                           }
                         />
+                        {infoQuery.data?.platform === "macos" ? (
+                          <SettingRow
+                            title={t("关闭窗口后隐藏 Dock 图标")}
+                            description={t(
+                              "关闭窗口时连 Dock 图标一起隐藏，只保留菜单栏托盘；再次打开窗口时 Dock 图标自动恢复",
+                            )}
+                            control={
+                              <Switch
+                                checked={draft.hide_dock_when_closed}
+                                onChange={(next) =>
+                                  update({ hide_dock_when_closed: next })
+                                }
+                                disabled={!draft.close_to_tray}
+                                label={t("关闭窗口后隐藏 Dock 图标")}
+                              />
+                            }
+                          />
+                        ) : null}
                       </div>
                     </Card>
 
@@ -569,6 +674,165 @@ export function SettingsDialog({
                       )}
                     </div>
                   </Card>
+                ) : null}
+
+                {section === "routes" ? (
+                  <div className="space-y-4">
+                    <Card>
+                      <CardHeader
+                        title={t("路由生效范围")}
+                        description={t(
+                          "取消勾选的网段不会写入系统路由表，也不参与路由冲突检测与自动重连恢复；修改对下一次连接生效。",
+                        )}
+                        actions={
+                          <>
+                            <Button
+                              size="sm"
+                              onClick={() => setRoutesEnabled(true)}
+                              disabled={routeRules.length === 0 || disabledRoutes.length === 0}
+                            >
+                              {t("全部启用")}
+                            </Button>
+                            <Button
+                              size="sm"
+                              onClick={() => setRoutesEnabled(false)}
+                              disabled={
+                                routeRules.length === 0 ||
+                                routeEnabledCount === routeRules.length
+                              }
+                            >
+                              {t("全部关闭")}
+                            </Button>
+                          </>
+                        }
+                      />
+                      <div className="flex flex-wrap items-center gap-2 px-5 pt-4">
+                        <Badge tone={routeEnabledCount === routeRules.length ? "ok" : "warn"}>
+                          {t("已启用 {enabled} / {total} 条", {
+                            enabled: routeEnabledCount,
+                            total: routeRules.length,
+                          })}
+                        </Badge>
+                        {routeSourceHint ? (
+                          <span className="text-[11px] text-faint">{routeSourceHint}</span>
+                        ) : null}
+                        <div className="relative ml-auto w-48">
+                          <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-faint" />
+                          <Input
+                            value={routeQuery}
+                            onChange={(event) => setRouteQuery(event.target.value)}
+                            placeholder={t("搜索网段")}
+                            className="h-8 pl-8 text-xs"
+                          />
+                        </div>
+                      </div>
+                      <div className="space-y-1.5 p-5">
+                        {routePolicyQuery.isLoading ? (
+                          <div className="flex h-24 items-center justify-center text-muted">
+                            <Spinner className="h-5 w-5" />
+                          </div>
+                        ) : routeRules.length === 0 ? (
+                          <EmptyState
+                            icon={<Network className="h-6 w-6" />}
+                            title={t("暂无网关下发的路由")}
+                            description={t("连接一次网关后，这里会列出需要走隧道的全部网段")}
+                          />
+                        ) : visibleRouteRules.length === 0 ? (
+                          <EmptyState
+                            icon={<Search className="h-6 w-6" />}
+                            title={t("没有匹配的网段")}
+                            description={t("换个关键词试试")}
+                          />
+                        ) : (
+                          visibleRouteRules.map((rule) => {
+                            const key = routeKey(rule.dest, rule.prefix);
+                            const enabled = isRouteEnabled(
+                              disabledRoutes,
+                              rule.dest,
+                              rule.prefix,
+                            );
+                            return (
+                              <div
+                                key={key}
+                                className={`flex items-center gap-3 rounded-xl border px-3 py-2 ${
+                                  enabled
+                                    ? "border-border bg-surface-2/40"
+                                    : "border-warn/30 bg-warn-soft/40"
+                                }`}
+                              >
+                                <span className="min-w-0 flex-1 truncate font-mono text-xs text-text">
+                                  {key}
+                                </span>
+                                <span className="hidden shrink-0 font-mono text-[11px] text-faint sm:block">
+                                  {rule.mask}
+                                </span>
+                                <Badge tone={enabled ? "ok" : "warn"}>
+                                  {enabled ? t("生效") : t("不生效")}
+                                </Badge>
+                                <Switch
+                                  checked={enabled}
+                                  onChange={(next) => toggleRouteEnabled(rule, next)}
+                                  label={t("{route} 写入系统路由表", { route: key })}
+                                />
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    </Card>
+
+                    <Card>
+                      <CardHeader
+                        title={t("手动排除网段")}
+                        description={t(
+                          "网关未下发、或需要提前排除的网段可以手动关闭；同样只影响下一次连接。",
+                        )}
+                      />
+                      <div className="space-y-3 p-5">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Input
+                            value={routeInput}
+                            onChange={(event) => setRouteInput(event.target.value)}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") addRouteExclusion();
+                            }}
+                            placeholder={t("10.0.0.0/8 或 10.0.0.0 255.0.0.0")}
+                            className="min-w-56 flex-1"
+                          />
+                          <Button size="sm" onClick={addRouteExclusion}>
+                            <Plus className="h-3.5 w-3.5" />
+                            {t("添加")}
+                          </Button>
+                        </div>
+
+                        {extraDisabledRoutes.length === 0 ? (
+                          <p className="text-[11px] text-faint">
+                            {t("暂无额外排除的网段")}
+                          </p>
+                        ) : (
+                          <div className="space-y-1.5">
+                            {extraDisabledRoutes.map((key) => (
+                              <div
+                                key={key}
+                                className="flex items-center gap-2 rounded-xl border border-border bg-surface-2/40 px-3 py-2"
+                              >
+                                <span className="min-w-0 flex-1 truncate font-mono text-xs text-text">
+                                  {key}
+                                </span>
+                                <Badge tone="warn">{t("不生效")}</Badge>
+                                <IconButton
+                                  label={t("恢复生效")}
+                                  onClick={() => removeRouteExclusion(key)}
+                                >
+                                  <RotateCcw className="h-4 w-4" />
+                                </IconButton>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </Card>
+                  </div>
                 ) : null}
 
                 {section === "appearance" ? (

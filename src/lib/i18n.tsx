@@ -220,6 +220,9 @@ const EN: Record<string, string> = {
   "关闭窗口时最小化到托盘": "Minimize to tray on close",
   "关闭按钮不退出程序，连接保持；从托盘菜单可彻底退出":
     "The close button keeps the connection and hides the window; quit from the tray menu",
+  "关闭窗口后隐藏 Dock 图标": "Hide Dock icon when the window is closed",
+  "关闭窗口时连 Dock 图标一起隐藏，只保留菜单栏托盘；再次打开窗口时 Dock 图标自动恢复":
+    "Hides the Dock icon together with the window and keeps only the menu bar tray; reopening the window restores the Dock icon",
   "断线自动重连": "Auto reconnect",
   "隧道异常断开后按指数退避重试，最多 5 次；主动断开不触发":
     "Retries with exponential backoff (up to 5 times) after an unexpected drop; manual disconnects are ignored",
@@ -273,6 +276,36 @@ const EN: Record<string, string> = {
   "该条目已存在": "This entry already exists",
   "代理绕过条目不能超过 128 条":
     "No more than 128 proxy bypass entries are allowed",
+  "路由生效范围": "Route scope",
+  "勾选哪些隧道路由不生效": "Choose which tunnel routes stay inactive",
+  "取消勾选的网段不会写入系统路由表，也不参与路由冲突检测与自动重连恢复；修改对下一次连接生效。":
+    "Unchecked subnets are not written into the system routing table and are skipped by route-conflict checks and automatic reconnect recovery; changes apply to the next connection.",
+  "当前会话由网关下发的路由": "Routes pushed by the gateway in the current session",
+  "上次登录缓存的网关路由": "Gateway routes cached from the last sign-in",
+  "全部启用": "Enable all",
+  "全部关闭": "Disable all",
+  "已启用 {enabled} / {total} 条":
+    "{enabled} of {total} routes enabled",
+  "搜索网段": "Search subnets",
+  "暂无网关下发的路由": "No gateway routes yet",
+  "连接一次网关后，这里会列出需要走隧道的全部网段":
+    "Connect to the gateway once and every subnet that needs the tunnel will be listed here",
+  "没有匹配的网段": "No matching subnets",
+  "换个关键词试试": "Try a different keyword",
+  "生效": "Active",
+  "不生效": "Inactive",
+  "{route} 写入系统路由表": "Write {route} into the system routing table",
+  "手动排除网段": "Manually excluded subnets",
+  "网关未下发、或需要提前排除的网段可以手动关闭；同样只影响下一次连接。":
+    "Subnets that the gateway did not push, or that you want to exclude up front, can be disabled manually; this also only affects the next connection.",
+  "10.0.0.0/8 或 10.0.0.0 255.0.0.0": "10.0.0.0/8 or 10.0.0.0 255.0.0.0",
+  "请输入合法的网段，例如 10.0.0.0/8 或 10.0.0.0 255.0.0.0":
+    "Enter a valid subnet, for example 10.0.0.0/8 or 10.0.0.0 255.0.0.0",
+  "该网段已在排除列表中": "This subnet is already excluded",
+  "排除网段不能超过 {count} 条":
+    "No more than {count} excluded subnets are allowed",
+  "暂无额外排除的网段": "No manually excluded subnets",
+  "恢复生效": "Restore",
   "设为默认": "Set as default",
   "已将「{name}」设为默认连接": "Set “{name}” as default profile",
   "连接配置已保存": "Profile saved",
