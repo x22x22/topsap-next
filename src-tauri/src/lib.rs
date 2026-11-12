@@ -4,6 +4,7 @@
 //! 退出前断开并清理网络配置。
 
 pub mod auth;
+pub mod autostart;
 pub mod commands;
 pub mod dto;
 #[cfg(target_os = "macos")]
@@ -77,6 +78,8 @@ pub fn run() {
                 log::warn!("启动时应用代理绕过失败：{err}");
             }
             setup_tray(app)?;
+            // 放在最后：窗口、托盘与引擎状态都已就绪，自动连接仍会异步延迟启动
+            crate::autostart::schedule(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -131,6 +134,7 @@ pub fn run() {
             commands::settings::proxy_bypass_status,
             commands::settings::route_policy,
             commands::settings::load_password,
+            commands::settings::has_saved_password,
             commands::profiles::list_connections,
             commands::profiles::save_connection,
             commands::profiles::delete_connection,

@@ -108,6 +108,7 @@ export const api = {
   proxyBypassStatus: () => call<ProxyBypassStatus>("proxy_bypass_status"),
   routePolicy: () => call<RoutePolicySnapshot>("route_policy"),
   loadPassword: (user: string) => call<string | null>("load_password", { user }),
+  hasSavedPassword: (user: string) => call<boolean>("has_saved_password", { user }),
 
   openLogDir: () => call<string>("open_log_dir"),
 

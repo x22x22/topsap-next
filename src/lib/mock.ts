@@ -201,6 +201,7 @@ async function handle(cmd: string, args?: Record<string, unknown>): Promise<unkn
         user: "demo",
         remember: false,
         auto_reconnect: true,
+        auto_connect_on_start: false,
         close_to_tray: true,
         theme: "system",
         proxy_bypass_enabled: true,
@@ -236,6 +237,9 @@ async function handle(cmd: string, args?: Record<string, unknown>): Promise<unkn
 
     case "load_password":
       return null;
+
+    case "has_saved_password":
+      return true;
 
     case "open_url":
       return null;

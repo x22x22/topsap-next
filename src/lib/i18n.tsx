@@ -226,6 +226,15 @@ const EN: Record<string, string> = {
   "断线自动重连": "Auto reconnect",
   "隧道异常断开后按指数退避重试，最多 5 次；主动断开不触发":
     "Retries with exponential backoff (up to 5 times) after an unexpected drop; manual disconnects are ignored",
+  "启动时自动连接": "Auto connect on launch",
+  "需先在「连接管理」保存一个连接配置":
+    "Save a connection profile under Connection profiles first",
+  "需在登录页填写账号并成功连接一次":
+    "Fill in the account on the sign-in page and connect once",
+  "需勾选「记住密码」并成功连接一次，以保存密码":
+    "Enable Remember password and connect once so the password is saved",
+  "启动软件后使用默认配置与已保存密码自动连接":
+    "Connect automatically on launch using the default profile and saved password",
   "主题": "Theme",
   "深浅色跟随或固定": "Follow the system or choose a fixed theme",
   "跟随系统": "Follow system",

@@ -44,3 +44,13 @@ pub fn route_policy(app: AppHandle) -> RoutePolicySnapshot {
 pub fn load_password(app: AppHandle, user: String) -> Option<String> {
     secret_store::load_password(&app, &user)
 }
+
+/// 只回答「是否已保存密码」，供设置页判断能否开启启动自动连接，不向前端返回明文
+#[tauri::command]
+pub fn has_saved_password(app: AppHandle, user: String) -> bool {
+    let user = user.trim();
+    if user.is_empty() {
+        return false;
+    }
+    secret_store::load_password(&app, user).is_some_and(|password| !password.is_empty())
+}

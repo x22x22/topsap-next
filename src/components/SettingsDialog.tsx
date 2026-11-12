@@ -36,6 +36,7 @@ import {
   Switch,
 } from "./ui";
 import { api } from "../lib/api";
+import { autoConnectAvailability } from "../lib/autoConnect";
 import { firstLine } from "../lib/format";
 import { useI18n, type LanguageMode } from "../lib/i18n";
 import {
@@ -112,6 +113,13 @@ export function SettingsDialog({
     | { kind: "clear" }
     | null
   >(null);
+
+  // 启动自动连接要求「保存过密码」，这里只查询存在性，不读取明文
+  const savedPasswordQuery = useQuery({
+    queryKey: ["saved-password", draft?.user ?? ""],
+    queryFn: () => api.hasSavedPassword(draft?.user ?? ""),
+    enabled: Boolean(draft?.user?.trim()),
+  });
 
   useEffect(() => {
     if (settingsQuery.data && !draft) setDraft(settingsQuery.data);
@@ -278,6 +286,21 @@ export function SettingsDialog({
       toast.success(t("已恢复默认代理绕过条目")),
     );
   };
+
+  // 启动自动连接：配置、账号、已保存密码三者齐全才允许勾选
+  const autoConnect = autoConnectAvailability({
+    profileCount: connectionsQuery.data?.connections.length ?? 0,
+    user: draft?.user ?? "",
+    hasPassword: savedPasswordQuery.data === true,
+  });
+  const autoConnectHint =
+    autoConnect.reason === "profiles"
+      ? t("需先在「连接管理」保存一个连接配置")
+      : autoConnect.reason === "account"
+        ? t("需在登录页填写账号并成功连接一次")
+        : autoConnect.reason === "password"
+          ? t("需勾选「记住密码」并成功连接一次，以保存密码")
+          : t("启动软件后使用默认配置与已保存密码自动连接");
 
   const routeRules = routePolicyQuery.data?.routes ?? [];
   const disabledRoutes = draft?.disabled_routes ?? [];
@@ -456,6 +479,20 @@ export function SettingsDialog({
                               checked={draft.auto_reconnect}
                               onChange={(next) => update({ auto_reconnect: next })}
                               label={t("断线自动重连")}
+                            />
+                          }
+                        />
+                        <SettingRow
+                          title={t("启动时自动连接")}
+                          description={autoConnectHint}
+                          control={
+                            <Switch
+                              checked={draft.auto_connect_on_start}
+                              onChange={(next) =>
+                                update({ auto_connect_on_start: next })
+                              }
+                              disabled={!autoConnect.available}
+                              label={t("启动时自动连接")}
                             />
                           }
                         />

@@ -237,6 +237,8 @@ pub struct AppSettings {
     pub remember: bool,
     pub auto_reconnect: bool,
     pub close_to_tray: bool,
+    /// 启动软件后自动使用默认连接配置与已保存密码连接
+    pub auto_connect_on_start: bool,
     /// system / dark / light
     pub theme: String,
     /// 是否把代理绕过条目写入系统代理设置
@@ -258,6 +260,7 @@ impl Default for AppSettings {
             remember: false,
             auto_reconnect: true,
             close_to_tray: true,
+            auto_connect_on_start: false,
             theme: "system".to_string(),
             proxy_bypass_enabled: true,
             proxy_bypass: crate::proxy_bypass::default_entries(),
