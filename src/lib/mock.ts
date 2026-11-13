@@ -120,6 +120,9 @@ async function handle(cmd: string, args?: Record<string, unknown>): Promise<unkn
     case "engine_snapshot":
       return stats;
 
+    case "session_summary":
+      return null;
+
     case "list_connections":
       return {
         active: "办公室",
