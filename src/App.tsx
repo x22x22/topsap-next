@@ -8,7 +8,13 @@ import { CaptchaDialog } from "./components/CaptchaDialog";
 import { RouteConflictDialog } from "./components/RouteConflictDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { SmsDialog } from "./components/SmsDialog";
-import { useConnect, useDisconnect, submitCaptcha, submitSms } from "./hooks/useConnection";
+import {
+  notifyConnected,
+  useConnect,
+  useDisconnect,
+  submitCaptcha,
+  submitSms,
+} from "./hooks/useConnection";
 import { useEngineEvents } from "./hooks/useEngineEvents";
 import { api } from "./lib/api";
 import { localizeError } from "./lib/errorText";
@@ -194,15 +200,17 @@ export default function App() {
   }, [engine.phase]);
 
   // 启动自动连接由后端发起，前端没有 connect 命令的返回值；连接完成（或页面在
-  // 已连接状态下加载）时补拉一次会话摘要，否则资源列表会一直显示「暂无资源」
+  // 已连接状态下加载）时补拉会话摘要，复用成功提示与空资源校验
   useEffect(() => {
     if (summary) return;
     if (engine.phase !== "idle" && engine.phase !== "connected") return;
     let cancelled = false;
     api
       .sessionSummary()
-      .then((data) => {
-        if (!cancelled && data) setSummary(data);
+      .then(async (data) => {
+        if (cancelled || !data) return;
+        const keep = await notifyConnected(data, {}, t, queryClient);
+        if (!cancelled && keep) setSummary(data);
       })
       .catch(() => {
         // 未连接或后端尚未就绪时忽略，下次阶段变化会重试
@@ -210,7 +218,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [engine.phase, summary]);
+  }, [engine.phase, summary, t, queryClient]);
 
   const decideRouteConflict = async (accept: boolean) => {
     if (routeDeciding) return;
