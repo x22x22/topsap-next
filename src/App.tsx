@@ -193,6 +193,25 @@ export default function App() {
     if (engine.phase === "idle" || engine.phase === "failed") setSummary(null);
   }, [engine.phase]);
 
+  // 启动自动连接由后端发起，前端没有 connect 命令的返回值；连接完成（或页面在
+  // 已连接状态下加载）时补拉一次会话摘要，否则资源列表会一直显示「暂无资源」
+  useEffect(() => {
+    if (summary) return;
+    if (engine.phase !== "idle" && engine.phase !== "connected") return;
+    let cancelled = false;
+    api
+      .sessionSummary()
+      .then((data) => {
+        if (!cancelled && data) setSummary(data);
+      })
+      .catch(() => {
+        // 未连接或后端尚未就绪时忽略，下次阶段变化会重试
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [engine.phase, summary]);
+
   const decideRouteConflict = async (accept: boolean) => {
     if (routeDeciding) return;
     setRouteDeciding(true);
