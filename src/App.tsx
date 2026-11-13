@@ -203,6 +203,7 @@ export default function App() {
   // 已连接状态下加载）时补拉会话摘要，复用成功提示与空资源校验
   useEffect(() => {
     if (summary) return;
+    if (!connect.isIdle) return;
     if (engine.phase !== "idle" && engine.phase !== "connected") return;
     let cancelled = false;
     api
@@ -218,7 +219,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [engine.phase, summary, t, queryClient]);
+  }, [engine.phase, summary, t, queryClient, connect.isIdle]);
 
   const decideRouteConflict = async (accept: boolean) => {
     if (routeDeciding) return;

@@ -559,7 +559,8 @@ const EN: Record<string, string> = {
   "密码过于简单，请修改密码": "Your password is too weak. Change it to continue.",
   "首次登录，请修改初始密码": "First login: change the initial password.",
   "管理员要求修改密码": "The administrator requires a password change.",
-  "密码修改成功，请重新连接": "Password changed. Reconnecting…",
+  "密码修改成功（新密码已自动填入），正在自动连接":
+    "Password changed (the new password has been filled in). Connecting…",
   "确认修改": "Change password",
   "虚拟 IP：": "Virtual IP:",
   "当前账号": "Current account",

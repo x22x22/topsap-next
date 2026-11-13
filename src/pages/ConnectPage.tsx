@@ -101,6 +101,23 @@ export function ConnectPage({
   const [lineProbes, setLineProbes] = useState<LineProbe[]>([]);
   const [linePickerOpen, setLinePickerOpen] = useState(false);
   const initialized = useRef(false);
+  const appliedActive = useRef<string | null>(null);
+
+  // 导入配置或在设置中切换默认连接后，连接页即时跟随新的默认配置
+  useEffect(() => {
+    const store = connectionsQuery.data;
+    if (!store) return;
+    if (appliedActive.current === null) {
+      appliedActive.current = store.active;
+      return;
+    }
+    if (store.active === appliedActive.current) return;
+    appliedActive.current = store.active;
+    const active = store.connections.find((item) => item.name === store.active);
+    if (!active) return;
+    setSelectedProfile(active.name);
+    setForm((prev) => formFromProfile(active, prev));
+  }, [connectionsQuery.data]);
 
   // 网关要求先改密时自动弹窗；关闭后清空事件，避免下次挂载重复弹出
   useEffect(() => {
@@ -532,7 +549,7 @@ export function ConnectPage({
           setPasswordAccount(next.user.trim());
           setExpiredOpen(false);
           engine.clearPasswordChange?.();
-          onConnect(next, { passwordAutoFilled: true });
+          onConnect(next);
         }}
       />
 

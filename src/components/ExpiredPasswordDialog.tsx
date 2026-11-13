@@ -60,7 +60,7 @@ export function ExpiredPasswordDialog({
     setSubmitting(true);
     try {
       await api.changePasswordForLogin(host, port, user, oldPassword, newPassword);
-      toastPasswordSuccess(t("密码修改成功，请重新连接"));
+      toastPasswordSuccess(t("密码修改成功（新密码已自动填入），正在自动连接"));
       onSaved(newPassword);
     } catch (error) {
       toast.error(firstLine(String(error)), { duration: 8000 });
