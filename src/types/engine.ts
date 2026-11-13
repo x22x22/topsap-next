@@ -170,10 +170,33 @@ export interface AppSettings {
   user: string;
   remember: boolean;
   auto_reconnect: boolean;
+  /** 启动软件后自动使用默认配置与已保存密码连接 */
+  auto_connect_on_start: boolean;
   close_to_tray: boolean;
   theme: ThemeMode;
   proxy_bypass_enabled: boolean;
   proxy_bypass: string[];
+  /** macOS：关闭窗口后同时隐藏 Dock 图标，仅保留菜单栏托盘 */
+  hide_dock_when_closed: boolean;
+  /** 不写入系统路由表的网段，格式 `目的地址/前缀` */
+  disabled_routes: string[];
+}
+
+/** 设置页可勾选的一条隧道路由 */
+export interface RouteRule {
+  dest: string;
+  mask: string;
+  prefix: number;
+  /** false 表示该网段不写入系统路由表 */
+  enabled: boolean;
+}
+
+export interface RoutePolicySnapshot {
+  routes: RouteRule[];
+  /** 当前是否存在已登录会话 */
+  online: boolean;
+  /** session=当前会话，cache=上次登录 */
+  source: string;
 }
 
 export interface ProxyBypassStatus {

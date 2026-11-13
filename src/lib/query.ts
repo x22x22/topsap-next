@@ -18,6 +18,7 @@ export const queryKeys = {
   appInfo: ["app-info"] as const,
   settings: ["settings"] as const,
   proxyBypass: ["proxy-bypass-status"] as const,
+  routePolicy: ["route-policy"] as const,
   residue: ["residue"] as const,
   snapshot: ["snapshot"] as const,
 };

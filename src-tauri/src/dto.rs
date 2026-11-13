@@ -237,12 +237,18 @@ pub struct AppSettings {
     pub remember: bool,
     pub auto_reconnect: bool,
     pub close_to_tray: bool,
+    /// 启动软件后自动使用默认连接配置与已保存密码连接
+    pub auto_connect_on_start: bool,
     /// system / dark / light
     pub theme: String,
     /// 是否把代理绕过条目写入系统代理设置
     pub proxy_bypass_enabled: bool,
     /// 域名/泛域名/IP 绕过列表，例如 *.sunline.cn
     pub proxy_bypass: Vec<String>,
+    /// macOS：关闭窗口后同时隐藏 Dock 图标，仅保留菜单栏托盘
+    pub hide_dock_when_closed: bool,
+    /// 不写入系统路由表的网段，格式 `目的地址/前缀`，例如 10.0.0.0/8
+    pub disabled_routes: Vec<String>,
 }
 
 impl Default for AppSettings {
@@ -254,9 +260,12 @@ impl Default for AppSettings {
             remember: false,
             auto_reconnect: true,
             close_to_tray: true,
+            auto_connect_on_start: false,
             theme: "system".to_string(),
             proxy_bypass_enabled: true,
             proxy_bypass: crate::proxy_bypass::default_entries(),
+            hide_dock_when_closed: false,
+            disabled_routes: Vec::new(),
         }
     }
 }
@@ -284,6 +293,7 @@ impl AppSettings {
             self.theme = "system".to_string();
         }
         self.proxy_bypass = crate::proxy_bypass::sanitize_entries(&self.proxy_bypass);
+        self.disabled_routes = crate::route_policy::sanitize_disabled(&self.disabled_routes);
         self
     }
 }
@@ -344,5 +354,21 @@ mod tests {
         let s: AppSettings = serde_json::from_str("{}").unwrap();
         assert_eq!(s.port, 443);
         assert!(s.auto_reconnect);
+        assert!(!s.hide_dock_when_closed);
+        assert!(s.disabled_routes.is_empty());
+    }
+
+    #[test]
+    fn 设置清洗_关闭路由归一化并去重() {
+        let s = AppSettings {
+            disabled_routes: vec![
+                " 10.1.2.3/8 ".into(),
+                "10.0.0.0/8".into(),
+                "not-a-cidr".into(),
+            ],
+            ..Default::default()
+        };
+        let s = s.sanitized();
+        assert_eq!(s.disabled_routes, vec!["10.0.0.0/8".to_string()]);
     }
 }

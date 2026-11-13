@@ -15,7 +15,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::auth::error::password_change_message;
-use crate::auth::{AuthClient, AuthError, AuthParam, LoginSession};
+use crate::auth::{AuthClient, AuthError, AuthParam, LoginSession, RouteEntry};
 use crate::dto::{
     EngineEvent, LineProbeDto, LoginForm, LoginInfoDto, ResourceDto, RouteConflictDto,
     SessionSummary, StatsDto,
@@ -64,6 +64,8 @@ struct Inner {
     session_cookie: Option<String>,
     /// 本次登录使用的账号，用于修改密码
     login_user: String,
+    /// 网关下发的完整路由（未按设置过滤），用于设置页勾选
+    routes_catalog: Vec<RouteEntry>,
 }
 
 #[derive(Debug, Clone)]
@@ -101,6 +103,7 @@ impl Inner {
             pending_sms: None,
             session_cookie: None,
             login_user: String::new(),
+            routes_catalog: Vec::new(),
         }
     }
 }
@@ -286,6 +289,12 @@ impl Engine {
 
     pub fn is_connected(&self) -> bool {
         self.lock().phase.connected()
+    }
+
+    /// 网关下发的完整路由目录；第二个返回值表示当前是否存在已登录会话
+    pub fn route_catalog(&self) -> (Vec<RouteEntry>, bool) {
+        let inner = self.lock();
+        (inner.routes_catalog.clone(), inner.session.is_some())
     }
 
     fn note_uplink_drop(&self) {
@@ -1103,9 +1112,25 @@ impl Engine {
             session.routes.len()
         ));
 
+        // 按设置排除不生效的网段：这些网段不注入系统路由，也不参与冲突检测
+        let disabled_routes = crate::settings::load(&self.app).disabled_routes;
+        crate::route_policy::save_cache(&self.app, &session.routes);
+        let routes_catalog = session.routes.clone();
+        if !disabled_routes.is_empty() {
+            let total = session.routes.len();
+            session.routes = crate::route_policy::filter_routes(&session.routes, &disabled_routes);
+            let skipped = total - session.routes.len();
+            if skipped > 0 {
+                self.log(format!(
+                    "已按设置排除 {skipped} 条隧道路由（网关下发 {total} 条）"
+                ));
+            }
+        }
+
         {
             let mut inner = self.lock();
             inner.session = Some(session.clone());
+            inner.routes_catalog = routes_catalog;
             inner.session_cookie = session_cookie;
             inner.login_user = form.user.clone();
         }
