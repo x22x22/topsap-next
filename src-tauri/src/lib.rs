@@ -115,6 +115,7 @@ pub fn run() {
             commands::conn::connect,
             commands::conn::disconnect,
             commands::conn::engine_snapshot,
+            commands::conn::session_summary,
             commands::conn::submit_captcha,
             commands::conn::submit_sms,
             commands::conn::submit_route_conflict,

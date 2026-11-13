@@ -56,6 +56,12 @@ pub fn engine_snapshot(state: State<'_, AppState>) -> StatsDto {
     state.engine.snapshot()
 }
 
+/// 当前会话摘要（含门户资源列表）；自动连接不经过前端 connect，需主动拉取补齐
+#[tauri::command]
+pub fn session_summary(state: State<'_, AppState>) -> Option<SessionSummary> {
+    state.engine.session_summary()
+}
+
 #[tauri::command]
 pub fn submit_captcha(state: State<'_, AppState>, code: String) -> bool {
     state.engine.submit_captcha(code)

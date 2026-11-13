@@ -44,6 +44,7 @@ export const api = {
   connect: (form: LoginForm) => call<SessionSummary>("connect", { form }),
   disconnect: () => call<void>("disconnect"),
   snapshot: () => call<Stats>("engine_snapshot"),
+  sessionSummary: () => call<SessionSummary | null>("session_summary"),
   submitCaptcha: (code: string) => call<boolean>("submit_captcha", { code }),
   submitSms: (code: string) => call<boolean>("submit_sms", { code }),
   submitRouteConflict: (accept: boolean) =>

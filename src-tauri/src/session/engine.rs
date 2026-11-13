@@ -297,6 +297,14 @@ impl Engine {
         (inner.routes_catalog.clone(), inner.session.is_some())
     }
 
+    /// 当前会话摘要（含门户资源列表）。
+    ///
+    /// 启动自动连接由后端发起，不会经过前端 `connect` 命令，前端拿不到返回值，
+    /// 需要主动拉取一次补齐资源列表等会话信息。
+    pub fn session_summary(&self) -> Option<SessionSummary> {
+        self.lock().session.as_ref().map(summary)
+    }
+
     fn note_uplink_drop(&self) {
         if !self.is_connected() {
             return;
