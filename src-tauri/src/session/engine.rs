@@ -242,8 +242,19 @@ impl Engine {
             label: phase.label().to_string(),
             detail,
         });
-        // 托盘图标跟随连接状态：未连接灰、已连接绿、连接过之后断开橙
-        crate::tray_status::update_for_phase(&self.app, phase == Phase::Connected);
+        // 托盘图标跟随连接状态：未连接灰、连接中蓝、已连接绿、异常断开红
+        let connecting = matches!(
+            phase,
+            Phase::Probing
+                | Phase::CaptchaPending
+                | Phase::SmsPending
+                | Phase::Authenticating
+                | Phase::CreatingTun
+                | Phase::Handshaking
+                | Phase::Configuring
+                | Phase::Reconnecting
+        );
+        crate::tray_status::update_for_phase(&self.app, phase == Phase::Connected, connecting);
     }
 
     fn log(&self, message: impl Into<String>) {

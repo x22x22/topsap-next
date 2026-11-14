@@ -68,6 +68,7 @@ function formFromProfile(profile: ConnectionProfile, base: LoginForm): LoginForm
 export function ConnectPage({
   engine,
   session,
+  everConnected,
   connecting,
   onConnect,
   onDisconnect,
@@ -75,6 +76,7 @@ export function ConnectPage({
 }: {
   engine: EngineView;
   session: SessionSummary | null;
+  everConnected?: boolean;
   connecting: boolean;
   onConnect: (form: LoginForm, options?: ConnectOptions) => void;
   onDisconnect: () => void;
@@ -291,6 +293,7 @@ export function ConnectPage({
         detail={engine.detail}
         vip={engine.stats.vip}
         masked=""
+        everConnected={everConnected}
       />
 
       {connected ? (

@@ -46,6 +46,8 @@ export default function App() {
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [routeDeciding, setRouteDeciding] = useState(false);
   const [summary, setSummary] = useState<SessionSummary | null>(null);
+  // 是否成功连接过：用于把「断开」和「从未连接」区分成红/灰两种状态色
+  const [everConnected, setEverConnected] = useState(false);
   const [resolvedTheme, setResolvedTheme] = useState<"dark" | "light">("dark");
   const [collapsed, setCollapsed] = useState(
     () => localStorage.getItem("topsap.sidebar") === "1",
@@ -199,6 +201,10 @@ export default function App() {
     if (engine.phase === "idle" || engine.phase === "failed") setSummary(null);
   }, [engine.phase]);
 
+  useEffect(() => {
+    if (engine.phase === "connected") setEverConnected(true);
+  }, [engine.phase]);
+
   // 启动自动连接由后端发起，前端没有 connect 命令的返回值；连接完成（或页面在
   // 已连接状态下加载）时补拉会话摘要，复用成功提示与空资源校验
   useEffect(() => {
@@ -272,6 +278,7 @@ export default function App() {
         page={page}
         onNavigate={handleNavigate}
         phase={engine.phase}
+        everConnected={everConnected}
         label={engine.label}
         vip={engine.stats.vip}
         version={infoQuery.data ? `v${infoQuery.data.version}` : ""}
@@ -289,6 +296,7 @@ export default function App() {
           <ConnectPage
             engine={engine}
             session={summary}
+            everConnected={everConnected}
             connecting={connect.isPending}
             onConnect={handleConnect}
             onDisconnect={() =>

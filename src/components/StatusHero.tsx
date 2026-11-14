@@ -1,6 +1,7 @@
 import { Loader2, ShieldAlert, ShieldCheck, ShieldOff } from "lucide-react";
 
 import { localizeError } from "../lib/errorText";
+import { statusTone } from "../lib/statusTone";
 import { useI18n } from "../lib/i18n";
 import type { EnginePhase } from "../types/engine";
 import { Card, StatusDot, cn } from "./ui";
@@ -22,17 +23,21 @@ export function StatusHero({
   detail,
   vip,
   masked,
+  everConnected = false,
 }: {
   phase: EnginePhase;
   label: string;
   detail: string;
   vip: string;
   masked: string;
+  everConnected?: boolean;
 }) {
   const { t } = useI18n();
   const connected = phase === "connected";
   const busy = BUSY.includes(phase);
-  const failed = phase === "failed";
+  const disconnected = !connected && phase === "idle" && everConnected;
+  const failed = phase === "failed" || disconnected;
+  const tone = statusTone(phase, everConnected);
 
   return (
     <Card className="relative overflow-hidden">
@@ -40,7 +45,12 @@ export function StatusHero({
       <div
         className={cn(
           "pointer-events-none absolute -right-24 -top-24 h-64 w-64 rounded-full blur-3xl",
-          connected ? "bg-ok/15" : failed ? "bg-danger/15" : "bg-accent/10",
+          {
+            ok: "bg-ok/15",
+            danger: "bg-danger/15",
+            info: "bg-info/15",
+            faint: "bg-surface-3/60",
+          }[tone],
         )}
       />
 
@@ -49,11 +59,12 @@ export function StatusHero({
           <div
             className={cn(
               "flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl border",
-              connected
-                ? "border-ok/30 bg-ok-soft text-ok"
-                : failed
-                  ? "border-danger/30 bg-danger-soft text-danger"
-                  : "border-accent/25 bg-accent-soft text-accent",
+              {
+                ok: "border-ok/30 bg-ok-soft text-ok",
+                danger: "border-danger/30 bg-danger-soft text-danger",
+                info: "border-info/30 bg-info-soft text-info",
+                faint: "border-border-strong bg-surface-3 text-faint",
+              }[tone],
             )}
           >
             {busy && phase !== "reconnecting" ? (
@@ -69,12 +80,14 @@ export function StatusHero({
 
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <StatusDot phase={phase} />
+              <StatusDot phase={phase} everConnected={everConnected} />
               <span className="text-[11px] uppercase tracking-[0.18em] text-faint">
                 {t("连接状态")}
               </span>
             </div>
-            <h2 className="mt-1 text-xl font-semibold tracking-tight">{t(label)}</h2>
+            <h2 className="mt-1 text-xl font-semibold tracking-tight">
+              {disconnected ? t("已断开") : t(label)}
+            </h2>
             <p className="mt-1 min-h-4 text-xs text-muted">
               {detail
                 ? failed

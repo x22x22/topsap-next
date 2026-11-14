@@ -9,6 +9,7 @@ import { AlertCircle, ChevronDown, Eye, EyeOff, Loader2, X } from "lucide-react"
 
 import type { EnginePhase } from "../types/engine";
 import { useI18n } from "../lib/i18n";
+import { statusTone } from "../lib/statusTone";
 
 export function cn(...values: Array<string | false | null | undefined>): string {
   return values.filter(Boolean).join(" ");
@@ -350,20 +351,28 @@ export function Badge({
   );
 }
 
-export function StatusDot({ phase, className }: { phase: EnginePhase; className?: string }) {
-  const tone =
-    phase === "connected"
-      ? "bg-ok"
-      : phase === "failed"
-        ? "bg-danger"
-        : phase === "idle"
-          ? "bg-faint"
-          : "bg-warn";
+export function StatusDot({
+  phase,
+  everConnected = false,
+  className,
+}: {
+  phase: EnginePhase;
+  everConnected?: boolean;
+  className?: string;
+}) {
+  // 与托盘图标保持一致：未连接灰、连接中蓝、已连接绿、异常断开红
+  const tone = statusTone(phase, everConnected);
+  const toneClass = {
+    ok: "bg-ok",
+    danger: "bg-danger",
+    info: "bg-info",
+    faint: "bg-faint",
+  }[tone];
   const animated = phase !== "idle" && phase !== "connected" && phase !== "failed";
 
   return (
     <span className={cn("inline-flex items-center justify-center", className)}>
-      <span className={cn("h-2 w-2 rounded-full", tone, animated && "pulse-ring")} />
+      <span className={cn("h-2 w-2 rounded-full", toneClass, animated && "pulse-ring")} />
     </span>
   );
 }

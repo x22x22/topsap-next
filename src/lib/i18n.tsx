@@ -226,6 +226,7 @@ const EN: Record<string, string> = {
   "断线自动重连": "Auto reconnect",
   "隧道异常断开后按指数退避重试；主动断开不触发":
     "Retries with exponential backoff after an unexpected drop; manual disconnects are ignored",
+  "已断开": "Disconnected",
   "重连次数": "Reconnect attempts",
   "按指数退避重试，间隔 2/4/8/16/32/60 秒（含 ±20% 抖动）":
     "Exponential backoff with 2/4/8/16/32/60 s intervals (±20% jitter)",

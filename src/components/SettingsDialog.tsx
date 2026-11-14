@@ -153,7 +153,6 @@ export function SettingsDialog({
     onSuccess: (_result, value) => {
       // 直接写回缓存，避免重新拉取旧数据导致开关或主题回跳
       queryClient.setQueryData(queryKeys.settings, value);
-      void queryClient.invalidateQueries({ queryKey: queryKeys.proxyBypass });
     },
     onError: (error) => {
       toast.error(`${t("保存失败")}：${firstLine(String(error))}`, { duration: 5000 });
@@ -248,7 +247,18 @@ export function SettingsDialog({
     if (!draft) return;
     const next = { ...draft, ...patch };
     setDraft(next);
-    save.mutate(next, onSaved ? { onSuccess: onSaved } : undefined);
+    // 只有代理相关字段变化才重查系统代理状态：该查询会调用系统接口，
+    // 每次切换开关都触发会让设置页明显发卡
+    const touchesProxy =
+      patch.proxy_bypass_enabled !== undefined || patch.proxy_bypass !== undefined;
+    save.mutate(next, {
+      onSuccess: () => {
+        if (touchesProxy) {
+          void queryClient.invalidateQueries({ queryKey: queryKeys.proxyBypass });
+        }
+        onSaved?.();
+      },
+    });
   };
 
   const proxyEntries = draft?.proxy_bypass ?? [];
