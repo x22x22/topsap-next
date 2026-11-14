@@ -25,6 +25,7 @@ pub mod session_guard;
 pub mod settings;
 pub mod shutdown;
 pub mod tls;
+pub mod tray_status;
 pub mod tun;
 pub mod tunnel;
 pub mod update;
@@ -254,8 +255,8 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &disconnect, &quit])?;
 
-    let mut builder = TrayIconBuilder::new()
-        .tooltip("TopSAP Client")
+    let mut builder = TrayIconBuilder::with_id(tray_status::TRAY_ID)
+        .tooltip(tray_status::tooltip(false))
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
@@ -281,9 +282,15 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
             }
         });
 
-    if let Some(icon) = app.default_window_icon().cloned() {
+    // 托盘图标用状态色区分连接状态；未连接时展示灰色空心圆环
+    if let Some(icon) = tray_status::icon(false) {
+        builder = builder.icon(icon);
+    } else if let Some(icon) = app.default_window_icon().cloned() {
         builder = builder.icon(icon);
     }
+    // macOS 默认按模板图标渲染（自动黑白），这里保留原始颜色
+    #[cfg(target_os = "macos")]
+    let builder = builder.icon_as_template(false);
     builder.build(app)?;
     Ok(())
 }

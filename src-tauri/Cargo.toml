@@ -1,6 +1,6 @@
 [package]
 name = "topsap-next"
-version = "1.5.3"
+version = "1.6.0"
 description = "TopSAP / 天融信 NGVONE SSL VPN 客户端"
 authors = ["TopSAP-Next contributors"]
 edition = "2021"
