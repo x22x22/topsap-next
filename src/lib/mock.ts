@@ -204,6 +204,7 @@ async function handle(cmd: string, args?: Record<string, unknown>): Promise<unkn
         user: "demo",
         remember: false,
         auto_reconnect: true,
+        auto_reconnect_max_attempts: 5,
         auto_connect_on_start: false,
         close_to_tray: true,
         theme: "system",

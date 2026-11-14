@@ -224,8 +224,16 @@ const EN: Record<string, string> = {
   "关闭窗口时连 Dock 图标一起隐藏，只保留菜单栏托盘；再次打开窗口时 Dock 图标自动恢复":
     "Hides the Dock icon together with the window and keeps only the menu bar tray; reopening the window restores the Dock icon",
   "断线自动重连": "Auto reconnect",
-  "隧道异常断开后按指数退避重试，最多 5 次；主动断开不触发":
-    "Retries with exponential backoff (up to 5 times) after an unexpected drop; manual disconnects are ignored",
+  "隧道异常断开后按指数退避重试；主动断开不触发":
+    "Retries with exponential backoff after an unexpected drop; manual disconnects are ignored",
+  "重连次数": "Reconnect attempts",
+  "按指数退避重试，间隔 2/4/8/16/32/60 秒（含 ±20% 抖动）":
+    "Exponential backoff with 2/4/8/16/32/60 s intervals (±20% jitter)",
+  "不限次数：按指数退避持续重试，最长间隔 60 秒，可随时手动断开":
+    "Unlimited: keeps retrying with exponential backoff, capped at 60 s; you can disconnect at any time",
+  "无限次": "Unlimited",
+  "次": "times",
+  "不限": "No limit",
   "启动时自动连接": "Auto connect on launch",
   "需先在「连接管理」保存一个连接配置":
     "Save a connection profile under Connection profiles first",

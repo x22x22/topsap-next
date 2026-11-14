@@ -33,7 +33,8 @@ use super::state::Phase;
 const CAPTCHA_TIMEOUT: Duration = Duration::from_secs(120);
 const SMS_TIMEOUT: Duration = Duration::from_secs(300);
 const ROUTE_CONFLICT_TIMEOUT: Duration = Duration::from_secs(120);
-const MAX_RECONNECT: u32 = 5;
+const RECONNECT_BASE_DELAY: Duration = Duration::from_secs(2);
+const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(60);
 const GATEWAY_RESOLVE_TIMEOUT: Duration = Duration::from_secs(3);
 const HEALTH_RECONNECT_MAX: u32 = 3;
 const HEALTH_VERIFY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -1520,7 +1521,10 @@ impl Engine {
         }
         let _guard = ReconnectGuard(&self.reconnecting);
 
-        let auto_reconnect = crate::settings::load(&self.app).auto_reconnect;
+        let settings = crate::settings::load(&self.app);
+        let auto_reconnect = settings.auto_reconnect;
+        // 0 表示不限次数
+        let max_attempts = settings.auto_reconnect_max_attempts;
         let should_reconnect = {
             let inner = self.lock();
             inner.phase == Phase::Connected && !inner.user_disconnect
@@ -1539,9 +1543,18 @@ impl Engine {
         self.set_phase(Phase::Reconnecting, "正在重连");
 
         let cancel = { self.lock().cancel.clone() };
-        for attempt in 1..=MAX_RECONNECT {
-            let wait = Duration::from_secs(u64::from(attempt) * 2);
-            tokio::time::sleep(wait).await;
+        let mut attempt = 0u32;
+        loop {
+            attempt += 1;
+            if max_attempts > 0 && attempt > max_attempts {
+                break;
+            }
+            // 指数退避 + 抖动；等待期间用户断开可立即退出，不必等满最长 60 秒
+            let wait = reconnect_delay(attempt);
+            tokio::select! {
+                _ = tokio::time::sleep(wait) => {}
+                _ = cancel.cancelled() => return,
+            }
             if cancel.is_cancelled() {
                 return;
             }
@@ -1549,7 +1562,17 @@ impl Engine {
             let session = { self.lock().session.clone() };
             let Some(session) = session else { return };
 
-            self.log(format!("第 {attempt}/{MAX_RECONNECT} 次重连尝试"));
+            if max_attempts == 0 {
+                self.log(format!(
+                    "第 {attempt} 次重连尝试（不限次数，间隔 {} 秒）",
+                    wait.as_secs()
+                ));
+            } else {
+                self.log(format!(
+                    "第 {attempt}/{max_attempts} 次重连尝试（间隔 {} 秒）",
+                    wait.as_secs()
+                ));
+            }
 
             match self.reopen_tunnel(&session, &cancel).await {
                 Ok(generation) => {
@@ -1567,7 +1590,11 @@ impl Engine {
             }
         }
 
-        self.log("重连次数已用尽，已断开连接");
+        if max_attempts == 0 {
+            self.log("重连已停止，已断开连接");
+        } else {
+            self.log("重连次数已用尽，已断开连接");
+        }
         let _ = self.disconnect().await;
     }
 
@@ -1993,6 +2020,32 @@ fn spawn_health(engine: std::sync::Weak<Engine>, cancel: CancellationToken) -> J
     })
 }
 
+/// 指数退避的基础间隔：第 n 次为 2 * 2^(n-1) 秒，封顶 60 秒。
+fn reconnect_backoff(attempt: u32) -> Duration {
+    let exponent = attempt.saturating_sub(1).min(6);
+    let seconds = RECONNECT_BASE_DELAY
+        .as_secs()
+        .saturating_mul(1u64 << exponent);
+    Duration::from_secs(seconds.min(RECONNECT_MAX_DELAY.as_secs()))
+}
+
+/// 在基础退避上加入 ±20% 抖动，避免多个客户端在同一时刻集中重连。
+fn reconnect_delay(attempt: u32) -> Duration {
+    let base = reconnect_backoff(attempt);
+    let millis = base.as_millis() as u64;
+    let spread = millis / 5;
+    if spread == 0 {
+        return base;
+    }
+    let offset = rand::random::<u64>() % (spread + 1);
+    let jittered = if rand::random::<bool>() {
+        millis.saturating_sub(offset)
+    } else {
+        millis.saturating_add(offset)
+    };
+    Duration::from_millis(jittered.max(500))
+}
+
 fn summary(session: &LoginSession) -> SessionSummary {
     SessionSummary {
         user: session.user_name.clone(),
@@ -2226,5 +2279,28 @@ mod tests {
         assert_eq!(ipv4_protocol(&ipv6), None);
 
         assert_eq!(ipv4_protocol(&[0x45, 0, 0]), None);
+    }
+
+    #[test]
+    fn 重连退避按两倍增长并封顶() {
+        assert_eq!(reconnect_backoff(1), Duration::from_secs(2));
+        assert_eq!(reconnect_backoff(2), Duration::from_secs(4));
+        assert_eq!(reconnect_backoff(3), Duration::from_secs(8));
+        assert_eq!(reconnect_backoff(4), Duration::from_secs(16));
+        assert_eq!(reconnect_backoff(5), Duration::from_secs(32));
+        assert_eq!(reconnect_backoff(6), Duration::from_secs(60));
+        assert_eq!(reconnect_backoff(50), Duration::from_secs(60));
+    }
+
+    #[test]
+    fn 重连抖动保持在正负二十百分比内() {
+        for attempt in 1..=8 {
+            let base = reconnect_backoff(attempt).as_millis() as u64;
+            for _ in 0..50 {
+                let millis = reconnect_delay(attempt).as_millis() as u64;
+                assert!(millis >= base * 8 / 10, "抖动下限越界：{millis} vs {base}");
+                assert!(millis <= base * 12 / 10, "抖动上限越界：{millis} vs {base}");
+            }
+        }
     }
 }

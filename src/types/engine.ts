@@ -170,6 +170,8 @@ export interface AppSettings {
   user: string;
   remember: boolean;
   auto_reconnect: boolean;
+  /** 断线自动重连的最大次数；0 表示不限次数 */
+  auto_reconnect_max_attempts: number;
   /** 启动软件后自动使用默认配置与已保存密码连接 */
   auto_connect_on_start: boolean;
   close_to_tray: boolean;

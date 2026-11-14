@@ -236,6 +236,8 @@ pub struct AppSettings {
     pub user: String,
     pub remember: bool,
     pub auto_reconnect: bool,
+    /// 断线自动重连的最大次数；0 表示不限次数
+    pub auto_reconnect_max_attempts: u32,
     pub close_to_tray: bool,
     /// 启动软件后自动使用默认连接配置与已保存密码连接
     pub auto_connect_on_start: bool,
@@ -259,6 +261,7 @@ impl Default for AppSettings {
             user: String::new(),
             remember: false,
             auto_reconnect: true,
+            auto_reconnect_max_attempts: 5,
             close_to_tray: true,
             auto_connect_on_start: false,
             theme: "system".to_string(),
@@ -292,6 +295,7 @@ impl AppSettings {
         if !matches!(self.theme.as_str(), "system" | "dark" | "light") {
             self.theme = "system".to_string();
         }
+        self.auto_reconnect_max_attempts = self.auto_reconnect_max_attempts.min(1000);
         self.proxy_bypass = crate::proxy_bypass::sanitize_entries(&self.proxy_bypass);
         self.disabled_routes = crate::route_policy::sanitize_disabled(&self.disabled_routes);
         self
@@ -354,6 +358,7 @@ mod tests {
         let s: AppSettings = serde_json::from_str("{}").unwrap();
         assert_eq!(s.port, 443);
         assert!(s.auto_reconnect);
+        assert_eq!(s.auto_reconnect_max_attempts, 5);
         assert!(!s.hide_dock_when_closed);
         assert!(s.disabled_routes.is_empty());
     }

@@ -106,6 +106,7 @@ export function SettingsDialog({
   const [bypassInput, setBypassInput] = useState("");
   const [routeInput, setRouteInput] = useState("");
   const [routeQuery, setRouteQuery] = useState("");
+  const [reconnectInput, setReconnectInput] = useState("5");
   const [profileOpen, setProfileOpen] = useState(false);
   const [editingProfile, setEditingProfile] = useState<ConnectionProfile | null>(null);
   const [confirmState, setConfirmState] = useState<
@@ -124,6 +125,12 @@ export function SettingsDialog({
   useEffect(() => {
     if (settingsQuery.data && !draft) setDraft(settingsQuery.data);
   }, [settingsQuery.data, draft]);
+
+  // 设置变化时同步重连次数输入框（0 = 不限次数，输入框沿用上次数值）
+  useEffect(() => {
+    const value = draft?.auto_reconnect_max_attempts ?? 5;
+    setReconnectInput(String(value === 0 ? 5 : value));
+  }, [draft?.auto_reconnect_max_attempts]);
 
   useEffect(() => {
     if (!open) return;
@@ -287,6 +294,9 @@ export function SettingsDialog({
     );
   };
 
+  // 断线自动重连：0 表示不限次数
+  const unlimitedReconnect = (draft?.auto_reconnect_max_attempts ?? 5) === 0;
+
   // 启动自动连接：配置、账号、已保存密码三者齐全才允许勾选
   const autoConnect = autoConnectAvailability({
     profileCount: connectionsQuery.data?.connections.length ?? 0,
@@ -372,6 +382,16 @@ export function SettingsDialog({
       );
     }
     update({ disabled_routes: result.entries });
+  };
+
+  const commitReconnectAttempts = () => {
+    if (!draft) return;
+    const parsed = Number.parseInt(reconnectInput, 10);
+    const next = Number.isFinite(parsed) ? Math.min(999, Math.max(1, parsed)) : 5;
+    setReconnectInput(String(next));
+    if (next !== draft.auto_reconnect_max_attempts) {
+      update({ auto_reconnect_max_attempts: next });
+    }
   };
 
   const changeTheme = (theme: ThemeMode) => {
@@ -473,13 +493,54 @@ export function SettingsDialog({
                         />
                         <SettingRow
                           title={t("断线自动重连")}
-                          description={t("隧道异常断开后按指数退避重试，最多 5 次；主动断开不触发")}
+                          description={t("隧道异常断开后按指数退避重试；主动断开不触发")}
                           control={
                             <Switch
                               checked={draft.auto_reconnect}
                               onChange={(next) => update({ auto_reconnect: next })}
                               label={t("断线自动重连")}
                             />
+                          }
+                        />
+                        <SettingRow
+                          title={t("重连次数")}
+                          description={
+                            unlimitedReconnect
+                              ? t("不限次数：按指数退避持续重试，最长间隔 60 秒，可随时手动断开")
+                              : t("按指数退避重试，间隔 2/4/8/16/32/60 秒（含 ±20% 抖动）")
+                          }
+                          control={
+                            <div className="flex items-center gap-2">
+                              <Input
+                                type="number"
+                                min={1}
+                                max={999}
+                                value={unlimitedReconnect ? "" : reconnectInput}
+                                placeholder={unlimitedReconnect ? t("不限") : "5"}
+                                aria-label={t("重连次数")}
+                                disabled={!draft.auto_reconnect || unlimitedReconnect}
+                                onChange={(event) => setReconnectInput(event.target.value)}
+                                onBlur={commitReconnectAttempts}
+                                onKeyDown={(event) => {
+                                  if (event.key === "Enter") commitReconnectAttempts();
+                                }}
+                                className="w-20"
+                              />
+                              <span className="whitespace-nowrap text-[11px] text-faint">{t("次")}</span>
+                              <Switch
+                                checked={unlimitedReconnect}
+                                onChange={(next) =>
+                                  update({
+                                    auto_reconnect_max_attempts: next
+                                      ? 0
+                                      : Math.max(1, draft.auto_reconnect_max_attempts || 5),
+                                  })
+                                }
+                                disabled={!draft.auto_reconnect}
+                                label={t("无限次")}
+                              />
+                              <span className="whitespace-nowrap text-[11px] text-faint">{t("无限次")}</span>
+                            </div>
                           }
                         />
                         <SettingRow
