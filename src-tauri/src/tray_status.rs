@@ -1,16 +1,17 @@
-//! 托盘图标状态：保留应用原图标形状，按连接状态着色。
+//! 托盘图标状态：保留应用原图标外观，只把盾牌主色按连接状态替换。
 //!
-//! - 未连接（尚未连接过）：灰色
+//! - 未连接（尚未连接成功）：灰色
 //! - 已连接：绿色
-//! - 已断开（连接过之后断开/失败）：橙色
+//! - 已断开（连接过之后断开/失败）：橙色，并以约 0.7 秒间隔在亮/暗橙色间闪烁
 //!
-//! 图标由应用原图标派生：先按亮度提取盾牌剪影（深色底与齿轮被压成透明，
-//! 保留抗锯齿），再用状态色填充，因此形状仍是原图标而不是另做的符号。
+//! 图标直接使用原图标的完整内容（深色圆角底、盾牌轮廓、齿轮全部保留），
+//! 仅把「青色盾牌」像素替换成状态色，因此尺寸与细节和原图标一致，不会变小。
 //!
 //! 状态由 `Engine::set_phase` 驱动；仅在状态真正变化时才调用系统接口。
 
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use tauri::image::Image;
 use tauri::AppHandle;
@@ -18,8 +19,12 @@ use tauri::AppHandle;
 /// 托盘图标 id，与 `setup_tray` 创建时保持一致
 pub const TRAY_ID: &str = "topsap-status";
 
-/// 菜单栏图标边长（像素，约 18pt @2x）
-const ICON_SIZE: u32 = 36;
+/// 闪烁间隔：亮橙与暗橙交替
+const BLINK_INTERVAL: Duration = Duration::from_millis(700);
+/// 暗态亮度系数（闪烁的“灭”相）
+const DIM_FACTOR: f32 = 0.55;
+/// 判定盾牌主色的亮度下限（原图标青色盾牌约 145，深色底与齿轮约 10~30）
+const SHIELD_LUMA: f32 = 55.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayState {
@@ -37,6 +42,14 @@ impl TrayState {
             Self::Idle => 0,
             Self::Connected => 1,
             Self::Disconnected => 2,
+        }
+    }
+
+    pub fn from_code(code: u8) -> Self {
+        match code {
+            1 => Self::Connected,
+            2 => Self::Disconnected,
+            _ => Self::Idle,
         }
     }
 
@@ -58,7 +71,7 @@ impl TrayState {
     }
 }
 
-/// 原图标缩放后的像素数据（RGBA），着色时复用
+/// 原图标像素数据（RGBA），着色时复用
 struct SourceIcon {
     rgba: Vec<u8>,
     width: u32,
@@ -68,6 +81,7 @@ struct SourceIcon {
 static SOURCE: OnceLock<Option<SourceIcon>> = OnceLock::new();
 static EVER_CONNECTED: AtomicBool = AtomicBool::new(false);
 static LAST_STATE: AtomicU8 = AtomicU8::new(0);
+static BLINK_ON: AtomicBool = AtomicBool::new(false);
 
 /// 初始化托盘图标：缓存原图标并返回「未连接」状态的图标
 pub fn init(app: &AppHandle) -> Option<Image<'static>> {
@@ -80,7 +94,7 @@ pub fn init(app: &AppHandle) -> Option<Image<'static>> {
     });
     source
         .as_ref()
-        .map(|icon| tint(icon, TrayState::Idle.color()))
+        .map(|source| render(source, TrayState::Idle, false))
 }
 
 /// 按引擎阶段更新托盘状态：只有 `Connected` 视为已连接
@@ -89,6 +103,23 @@ pub fn update_for_phase(app: &AppHandle, connected: bool) {
     let (state, ever_after) = resolve(connected, ever);
     EVER_CONNECTED.store(ever_after, Ordering::SeqCst);
     apply(app, state);
+}
+
+/// 启动闪烁任务：仅在「已断开」状态时交替亮/暗，其他状态保持静态
+pub fn start_blink_task(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(BLINK_INTERVAL).await;
+            let state = TrayState::from_code(LAST_STATE.load(Ordering::SeqCst));
+            if state != TrayState::Disconnected {
+                BLINK_ON.store(false, Ordering::SeqCst);
+                continue;
+            }
+            let lit = !BLINK_ON.load(Ordering::SeqCst);
+            BLINK_ON.store(lit, Ordering::SeqCst);
+            set_icon(&app, state, lit);
+        }
+    });
 }
 
 /// 状态推导：连接成功会记录「连接过」，此后断开显示已断开而不是未连接
@@ -106,60 +137,52 @@ fn apply(app: &AppHandle, state: TrayState) {
     if LAST_STATE.swap(state.code(), Ordering::SeqCst) == state.code() {
         return;
     }
+    BLINK_ON.store(false, Ordering::SeqCst);
+    set_icon(app, state, true);
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        let _ = tray.set_tooltip(Some(state.tooltip()));
+    }
+}
+
+/// 仅替换图标（不改状态），`lit` 为 false 时使用暗态用于闪烁
+fn set_icon(app: &AppHandle, state: TrayState, lit: bool) {
     let Some(tray) = app.tray_by_id(TRAY_ID) else {
         return;
     };
-    if let Some(icon) = icon_for(state) {
-        let _ = tray.set_icon(Some(icon));
-        // 运行期替换图标后再次关闭模板渲染，保证状态色不会被系统抹平
-        #[cfg(target_os = "macos")]
-        let _ = tray.set_icon_as_template(false);
-    }
-    let _ = tray.set_tooltip(Some(state.tooltip()));
+    let Some(source) = SOURCE.get().and_then(|source| source.as_ref()) else {
+        return;
+    };
+    let icon = render(source, state, !lit);
+    let _ = tray.set_icon(Some(icon));
+    // 运行期替换图标后再次关闭模板渲染，保证状态色不会被系统抹平
+    #[cfg(target_os = "macos")]
+    let _ = tray.set_icon_as_template(false);
 }
 
-fn icon_for(state: TrayState) -> Option<Image<'static>> {
-    SOURCE
-        .get()
-        .and_then(|source| source.as_ref())
-        .map(|source| tint(source, state.color()))
+fn render(source: &SourceIcon, state: TrayState, dim: bool) -> Image<'static> {
+    let rgba = recolor(&source.rgba, state.color(), dim);
+    Image::new_owned(rgba, source.width, source.height)
 }
 
-/// 把原图标转成指定颜色的剪影：
-/// 先做盒式降采样，再按亮度把深色底与齿轮压成透明，保留盾牌轮廓与抗锯齿。
-fn tint(source: &SourceIcon, color: [u8; 3]) -> Image<'static> {
-    let size = ICON_SIZE;
-    let mut out = Vec::with_capacity((size * size * 4) as usize);
-    for y in 0..size {
-        for x in 0..size {
-            let x0 = x * source.width / size;
-            let x1 = ((x + 1) * source.width / size).max(x0 + 1);
-            let y0 = y * source.height / size;
-            let y1 = ((y + 1) * source.height / size).max(y0 + 1);
-            let (mut r, mut g, mut b, mut a, mut n) = (0u64, 0u64, 0u64, 0u64, 0u64);
-            for sy in y0..y1 {
-                for sx in x0..x1 {
-                    let index = ((sy * source.width + sx) * 4) as usize;
-                    if index + 3 >= source.rgba.len() {
-                        continue;
-                    }
-                    r += u64::from(source.rgba[index]);
-                    g += u64::from(source.rgba[index + 1]);
-                    b += u64::from(source.rgba[index + 2]);
-                    a += u64::from(source.rgba[index + 3]);
-                    n += 1;
-                }
-            }
-            let n = n.max(1) as f64;
-            let luma = 0.2126 * (r as f64 / n) + 0.7152 * (g as f64 / n) + 0.0722 * (b as f64 / n);
-            let alpha_in = a as f64 / n;
-            // 原图标深色圆角底与齿轮亮度约 10~30，盾牌约 145：阈值把前者压成透明
-            let shape = ((luma - 48.0) / 96.0).clamp(0.0, 1.0);
-            let alpha = (alpha_in * shape).round() as u8;
-            out.extend_from_slice(&[color[0], color[1], color[2], alpha]);
+/// 把盾牌主色替换成状态色，其余像素（深色底、齿轮、圆角边缘）原样保留。
+fn recolor(source: &[u8], color: [u8; 3], dim: bool) -> Vec<u8> {
+    let factor = if dim { DIM_FACTOR } else { 1.0 };
+    let target = [
+        (f32::from(color[0]) * factor).round() as u8,
+        (f32::from(color[1]) * factor).round() as u8,
+        (f32::from(color[2]) * factor).round() as u8,
+    ];
+    let mut out = Vec::with_capacity(source.len());
+    for chunk in source.chunks_exact(4) {
+        let (r, g, b, a) = (chunk[0], chunk[1], chunk[2], chunk[3]);
+        let luma = 0.2126 * f32::from(r) + 0.7152 * f32::from(g) + 0.0722 * f32::from(b);
+        if luma >= SHIELD_LUMA && b > r {
+            out.extend_from_slice(&[target[0], target[1], target[2], a]);
+        } else {
+            out.extend_from_slice(chunk);
         }
     }
-    Image::new_owned(out, size, size)
+    out
 }
 
 #[cfg(test)]
@@ -192,27 +215,35 @@ mod tests {
         assert_ne!(idle.tooltip(), connected.tooltip());
         assert_ne!(connected.tooltip(), disconnected.tooltip());
         assert!(disconnected.tooltip().contains("已断开"));
+        assert_eq!(TrayState::from_code(idle.code()), TrayState::Idle);
+        assert_eq!(TrayState::from_code(connected.code()), TrayState::Connected);
+        assert_eq!(
+            TrayState::from_code(disconnected.code()),
+            TrayState::Disconnected
+        );
     }
 
     #[test]
-    fn 着色保留盾牌剪影并压掉深色背景() {
-        // 2x2 源图：左上深色底（应透明），右下亮色盾牌（应保留）
-        let source = SourceIcon {
-            rgba: vec![
-                20, 24, 30, 255, 20, 24, 30, 255, 20, 24, 30, 255, 42, 168, 224, 255,
-            ],
-            width: 2,
-            height: 2,
-        };
-        let image = tint(&source, [52, 199, 89]);
-        assert_eq!(image.width(), ICON_SIZE);
-        assert_eq!(image.height(), ICON_SIZE);
-        let rgba = image.rgba();
-        // 左上角来自深色底 -> 透明
-        assert_eq!(rgba[3], 0);
-        // 右下角来自盾牌 -> 不透明且使用状态色
-        let last = rgba.len() - 4;
-        assert!(rgba[last + 3] > 200, "盾牌区域应保留 alpha");
-        assert_eq!(&rgba[last..last + 3], &[52, 199, 89]);
+    fn 只替换盾牌主色并保留深色底座与齿轮() {
+        // 依次：深色圆角底、青色盾牌、黑色齿轮、半透明边缘
+        let source = vec![
+            20, 24, 30, 255, // 深色底
+            42, 168, 224, 255, // 青色盾牌
+            10, 13, 18, 255, // 黑齿轮
+            20, 24, 30, 128, // 半透明边缘
+        ];
+        let out = recolor(&source, [52, 199, 89], false);
+        assert_eq!(&out[0..4], &[20, 24, 30, 255], "深色底应原样保留");
+        assert_eq!(&out[4..8], &[52, 199, 89, 255], "盾牌应替换为状态色");
+        assert_eq!(&out[8..12], &[10, 13, 18, 255], "齿轮应原样保留");
+        assert_eq!(&out[12..16], &[20, 24, 30, 128], "边缘透明度应保留");
+    }
+
+    #[test]
+    fn 暗态按比例压暗状态色() {
+        let source = vec![42, 168, 224, 255];
+        let out = recolor(&source, [255, 149, 0], true);
+        assert!(out[0] < 255 && out[1] < 149, "暗态应整体压暗");
+        assert_eq!(out[3], 255, "透明度保持不变");
     }
 }

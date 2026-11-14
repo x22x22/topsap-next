@@ -80,6 +80,8 @@ pub fn run() {
                 log::warn!("启动时应用代理绕过失败：{err}");
             }
             setup_tray(app)?;
+            // 异常断开时托盘图标闪烁，放在托盘创建之后启动
+            crate::tray_status::start_blink_task(app.handle().clone());
             // 放在最后：窗口、托盘与引擎状态都已就绪，自动连接仍会异步延迟启动
             crate::autostart::schedule(app.handle());
             Ok(())
