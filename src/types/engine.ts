@@ -232,7 +232,7 @@ export interface UtunCleanupResult {
 }
 
 export type EngineEvent =
-  | { kind: "state"; state: EnginePhase; label: string; detail: string }
+  | { kind: "state"; state: EnginePhase; label: string; detail: string; abnormal?: boolean }
   | { kind: "log"; line: string }
   | { kind: "stats"; stats: Stats }
   | { kind: "captcha"; png_base64: string }

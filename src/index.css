@@ -20,6 +20,8 @@
   --accent-soft: #22d3ee1f;
   --info: #0a84ff;
   --info-soft: #0a84ff1f;
+  --closing: #64d2ff;
+  --closing-soft: #64d2ff1f;
   --ok: #34d399;
   --ok-soft: #34d3991f;
   --warn: #fbbf24;
@@ -49,6 +51,8 @@ html.light {
   --accent-soft: #0891b214;
   --info: #007aff;
   --info-soft: #007aff14;
+  --closing: #0284c7;
+  --closing-soft: #0284c71a;
   --ok: #059669;
   --ok-soft: #05966914;
   --warn: #b45309;
@@ -78,6 +82,8 @@ html.light {
   --color-accent-soft: var(--accent-soft);
   --color-info: var(--info);
   --color-info-soft: var(--info-soft);
+  --color-closing: var(--closing);
+  --color-closing-soft: var(--closing-soft);
   --color-ok: var(--ok);
   --color-ok-soft: var(--ok-soft);
   --color-warn: var(--warn);

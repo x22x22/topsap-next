@@ -15,6 +15,8 @@ export interface EngineView {
   phase: EnginePhase;
   label: string;
   detail: string;
+  /** 最近一次状态变化是否来自异常断开（用于区分人为断开） */
+  abnormalDisconnect: boolean;
   logs: string[];
   stats: Stats;
   captcha: string | null;
@@ -37,6 +39,7 @@ const INITIAL: EngineView = {
   phase: "idle",
   label: "未连接",
   detail: "",
+  abnormalDisconnect: false,
   logs: [],
   stats: EMPTY_STATS,
   captcha: null,
@@ -134,6 +137,7 @@ function applyEvent(prev: EngineView, event: EngineEvent): EngineView {
       return {
         ...prev,
         phase: event.state,
+        abnormalDisconnect: event.abnormal ?? false,
         label: event.label,
         detail: event.detail,
         smsChallenge: closed ? null : prev.smsChallenge,

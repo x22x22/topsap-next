@@ -69,6 +69,7 @@ export function ConnectPage({
   engine,
   session,
   everConnected,
+  abnormalDisconnect,
   connecting,
   onConnect,
   onDisconnect,
@@ -77,6 +78,7 @@ export function ConnectPage({
   engine: EngineView;
   session: SessionSummary | null;
   everConnected?: boolean;
+  abnormalDisconnect?: boolean;
   connecting: boolean;
   onConnect: (form: LoginForm, options?: ConnectOptions) => void;
   onDisconnect: () => void;
@@ -294,6 +296,7 @@ export function ConnectPage({
         vip={engine.stats.vip}
         masked=""
         everConnected={everConnected}
+        abnormalDisconnect={abnormalDisconnect}
       />
 
       {connected ? (

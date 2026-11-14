@@ -53,6 +53,8 @@ struct Inner {
     net: Option<NetConfig>,
     started_at: Option<Instant>,
     user_disconnect: bool,
+    /// 本次断开是否由异常（掉线/重连失败）导致，用于托盘红色提示
+    abnormal_disconnect: bool,
     cancel: CancellationToken,
     stats_task: Option<JoinHandle<()>>,
     health_task: Option<JoinHandle<()>>,
@@ -94,6 +96,7 @@ impl Inner {
             net: None,
             started_at: None,
             user_disconnect: false,
+            abnormal_disconnect: false,
             cancel: CancellationToken::new(),
             stats_task: None,
             health_task: None,
@@ -237,12 +240,15 @@ impl Engine {
             inner.phase = phase;
             inner.detail = detail.clone();
         }
+        let abnormal = self.lock().abnormal_disconnect;
         self.emit(EngineEvent::State {
             state: phase.key().to_string(),
             label: phase.label().to_string(),
             detail,
+            abnormal,
         });
-        // 托盘图标跟随连接状态：未连接灰、连接中蓝、已连接绿、异常断开红
+        // 托盘图标跟随连接状态：
+        // 未连接灰、连接中蓝、已连接绿、正在断开浅蓝、异常断开红
         let connecting = matches!(
             phase,
             Phase::Probing
@@ -254,7 +260,13 @@ impl Engine {
                 | Phase::Configuring
                 | Phase::Reconnecting
         );
-        crate::tray_status::update_for_phase(&self.app, phase == Phase::Connected, connecting);
+        crate::tray_status::update_for_phase(
+            &self.app,
+            phase == Phase::Connected,
+            connecting,
+            phase == Phase::Disconnecting,
+            abnormal,
+        );
     }
 
     fn log(&self, message: impl Into<String>) {
@@ -882,6 +894,7 @@ impl Engine {
             let mut inner = self.lock();
             inner.cancel = CancellationToken::new();
             inner.user_disconnect = false;
+            inner.abnormal_disconnect = false;
             inner.cancel.clone()
         };
         let candidates = build_candidates(&form);
@@ -1545,6 +1558,7 @@ impl Engine {
         }
 
         if !auto_reconnect {
+            self.lock().abnormal_disconnect = true;
             self.log(format!("隧道已断开：{reason}，自动重连已关闭"));
             let _ = self.disconnect().await;
             return;
@@ -1601,6 +1615,7 @@ impl Engine {
             }
         }
 
+        self.lock().abnormal_disconnect = true;
         if max_attempts == 0 {
             self.log("重连已停止，已断开连接");
         } else {

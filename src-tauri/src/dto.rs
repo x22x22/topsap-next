@@ -189,6 +189,8 @@ pub enum EngineEvent {
         state: String,
         label: String,
         detail: String,
+        /// 本次状态变化是否源自异常断开（掉线、重连失败），供界面区分人为断开
+        abnormal: bool,
     },
     Log {
         line: String,

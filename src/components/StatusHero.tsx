@@ -24,6 +24,7 @@ export function StatusHero({
   vip,
   masked,
   everConnected = false,
+  abnormalDisconnect = false,
 }: {
   phase: EnginePhase;
   label: string;
@@ -31,13 +32,14 @@ export function StatusHero({
   vip: string;
   masked: string;
   everConnected?: boolean;
+  abnormalDisconnect?: boolean;
 }) {
   const { t } = useI18n();
   const connected = phase === "connected";
   const busy = BUSY.includes(phase);
   const disconnected = !connected && phase === "idle" && everConnected;
   const failed = phase === "failed" || disconnected;
-  const tone = statusTone(phase, everConnected);
+  const tone = statusTone(phase, everConnected, abnormalDisconnect);
 
   return (
     <Card className="relative overflow-hidden">
@@ -49,6 +51,7 @@ export function StatusHero({
             ok: "bg-ok/15",
             danger: "bg-danger/15",
             info: "bg-info/15",
+            closing: "bg-closing/15",
             faint: "bg-surface-3/60",
           }[tone],
         )}
@@ -63,6 +66,7 @@ export function StatusHero({
                 ok: "border-ok/30 bg-ok-soft text-ok",
                 danger: "border-danger/30 bg-danger-soft text-danger",
                 info: "border-info/30 bg-info-soft text-info",
+                closing: "border-closing/30 bg-closing-soft text-closing",
                 faint: "border-border-strong bg-surface-3 text-faint",
               }[tone],
             )}
@@ -80,7 +84,11 @@ export function StatusHero({
 
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <StatusDot phase={phase} everConnected={everConnected} />
+              <StatusDot
+                phase={phase}
+                everConnected={everConnected}
+                abnormalDisconnect={abnormalDisconnect}
+              />
               <span className="text-[11px] uppercase tracking-[0.18em] text-faint">
                 {t("连接状态")}
               </span>

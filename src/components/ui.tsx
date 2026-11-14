@@ -354,18 +354,21 @@ export function Badge({
 export function StatusDot({
   phase,
   everConnected = false,
+  abnormalDisconnect = false,
   className,
 }: {
   phase: EnginePhase;
   everConnected?: boolean;
+  abnormalDisconnect?: boolean;
   className?: string;
 }) {
-  // 与托盘图标保持一致：未连接灰、连接中蓝、已连接绿、异常断开红
-  const tone = statusTone(phase, everConnected);
+  // 与托盘图标保持一致：未连接灰、连接中蓝、已连接绿、正在断开浅蓝、异常断开红
+  const tone = statusTone(phase, everConnected, abnormalDisconnect);
   const toneClass = {
     ok: "bg-ok",
     danger: "bg-danger",
     info: "bg-info",
+    closing: "bg-closing",
     faint: "bg-faint",
   }[tone];
   const animated = phase !== "idle" && phase !== "connected" && phase !== "failed";

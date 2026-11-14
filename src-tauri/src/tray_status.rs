@@ -34,6 +34,8 @@ pub enum TrayState {
     Connecting,
     /// 当前已连接
     Connected,
+    /// 人为断开进行中
+    Disconnecting,
     /// 连接过之后异常断开或失败
     Disconnected,
 }
@@ -44,7 +46,8 @@ impl TrayState {
             Self::Idle => 0,
             Self::Connecting => 1,
             Self::Connected => 2,
-            Self::Disconnected => 3,
+            Self::Disconnecting => 3,
+            Self::Disconnected => 4,
         }
     }
 
@@ -52,17 +55,19 @@ impl TrayState {
         match code {
             1 => Self::Connecting,
             2 => Self::Connected,
-            3 => Self::Disconnected,
+            3 => Self::Disconnecting,
+            4 => Self::Disconnected,
             _ => Self::Idle,
         }
     }
 
-    /// 状态色：灰（未连接）/ 蓝（连接中）/ 绿（已连接）/ 红（异常断开）
+    /// 状态色：灰（未连接）/ 蓝（连接中）/ 绿（已连接）/ 浅蓝（正在断开）/ 红（异常断开）
     pub fn color(self) -> [u8; 3] {
         match self {
             Self::Idle => [142, 142, 147],
             Self::Connecting => [10, 132, 255],
             Self::Connected => [52, 199, 89],
+            Self::Disconnecting => [100, 210, 255],
             Self::Disconnected => [255, 69, 58],
         }
     }
@@ -72,6 +77,7 @@ impl TrayState {
             Self::Idle => "TopSAP Client · 未连接",
             Self::Connecting => "TopSAP Client · 连接中",
             Self::Connected => "TopSAP Client · 已连接",
+            Self::Disconnecting => "TopSAP Client · 正在断开",
             Self::Disconnected => "TopSAP Client · 已断开",
         }
     }
@@ -104,9 +110,15 @@ pub fn init(app: &AppHandle) -> Option<Image<'static>> {
 }
 
 /// 按引擎阶段更新托盘状态：只有 `Connected` 视为已连接
-pub fn update_for_phase(app: &AppHandle, connected: bool, connecting: bool) {
+pub fn update_for_phase(
+    app: &AppHandle,
+    connected: bool,
+    connecting: bool,
+    disconnecting: bool,
+    abnormal: bool,
+) {
     let ever = EVER_CONNECTED.load(Ordering::SeqCst);
-    let (state, ever_after) = resolve(connected, connecting, ever);
+    let (state, ever_after) = resolve(connected, connecting, disconnecting, abnormal, ever);
     EVER_CONNECTED.store(ever_after, Ordering::SeqCst);
     apply(app, state);
 }
@@ -129,15 +141,26 @@ pub fn start_blink_task(app: AppHandle) {
 }
 
 /// 状态推导：连接成功会记录「连接过」，此后断开显示已断开而不是未连接
-fn resolve(connected: bool, connecting: bool, ever_connected: bool) -> (TrayState, bool) {
+fn resolve(
+    connected: bool,
+    connecting: bool,
+    disconnecting: bool,
+    abnormal: bool,
+    ever_connected: bool,
+) -> (TrayState, bool) {
     if connected {
         (TrayState::Connected, true)
+    } else if disconnecting {
+        // 人为断开进行中：用浅蓝，不按异常红色处理
+        (TrayState::Disconnecting, ever_connected)
     } else if connecting {
         (TrayState::Connecting, ever_connected)
-    } else if ever_connected {
+    } else if abnormal && ever_connected {
+        // 掉线/重连失败等非人为断开：红色提醒
         (TrayState::Disconnected, true)
     } else {
-        (TrayState::Idle, false)
+        // 从未连接，或人为断开完成：回到未连接
+        (TrayState::Idle, ever_connected)
     }
 }
 
@@ -198,25 +221,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn 状态推导区分未连接连接中已连接与已断开() {
-        let (idle, ever) = resolve(false, false, false);
+    fn 状态推导区分未连接连接中已连接正在断开与已断开() {
+        let (idle, ever) = resolve(false, false, false, false, false);
         assert_eq!(idle, TrayState::Idle);
         assert!(!ever);
 
-        let (connecting, ever) = resolve(false, true, false);
+        let (connecting, ever) = resolve(false, true, false, false, false);
         assert_eq!(connecting, TrayState::Connecting);
         assert!(!ever);
 
-        let (connected, ever) = resolve(true, false, false);
+        let (connected, ever) = resolve(true, false, false, false, false);
         assert_eq!(connected, TrayState::Connected);
         assert!(ever);
 
-        let (disconnected, ever) = resolve(false, false, true);
-        assert_eq!(disconnected, TrayState::Disconnected);
+        // 人为断开进行中：浅蓝，不是红色
+        let (closing, ever) = resolve(false, false, true, false, true);
+        assert_eq!(closing, TrayState::Disconnecting);
+        assert!(ever);
+
+        // 人为断开完成：回到未连接（灰），不提示异常
+        let (idle_after_manual, ever) = resolve(false, false, false, false, true);
+        assert_eq!(idle_after_manual, TrayState::Idle);
+        assert!(ever);
+
+        // 异常断开（掉线/重连失败）：红色
+        let (abnormal, ever) = resolve(false, false, false, true, true);
+        assert_eq!(abnormal, TrayState::Disconnected);
         assert!(ever);
 
         // 已连接过之后进入重连：显示连接中，仍保留「曾经连接」标记
-        let (reconnecting, ever) = resolve(false, true, true);
+        let (reconnecting, ever) = resolve(false, true, false, false, true);
         assert_eq!(reconnecting, TrayState::Connecting);
         assert!(ever);
     }
@@ -227,6 +261,7 @@ mod tests {
             TrayState::Idle,
             TrayState::Connecting,
             TrayState::Connected,
+            TrayState::Disconnecting,
             TrayState::Disconnected,
         ];
         for i in 0..states.len() {
@@ -236,6 +271,7 @@ mod tests {
             }
         }
         assert!(TrayState::Connecting.tooltip().contains("连接中"));
+        assert!(TrayState::Disconnecting.tooltip().contains("正在断开"));
         assert!(TrayState::Disconnected.tooltip().contains("已断开"));
         for state in states {
             assert_eq!(TrayState::from_code(state.code()), state);

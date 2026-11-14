@@ -33,6 +33,7 @@ export function AppShell({
   onNavigate,
   phase,
   everConnected = false,
+  abnormalDisconnect = false,
   label,
   vip,
   version,
@@ -49,6 +50,7 @@ export function AppShell({
 }: {
   page: PageId;
   everConnected?: boolean;
+  abnormalDisconnect?: boolean;
   onNavigate: (page: PageId) => void;
   phase: EnginePhase;
   label: string;
@@ -146,12 +148,12 @@ export function AppShell({
         <div className={cn("mt-auto", collapsed ? "flex flex-col items-center gap-2" : "space-y-3")}>
           {collapsed ? (
             <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-border bg-surface/70" title={t(label)}>
-              <StatusDot phase={phase} everConnected={everConnected} />
+              <StatusDot phase={phase} everConnected={everConnected} abnormalDisconnect={abnormalDisconnect} />
             </div>
           ) : (
             <div className="rounded-xl border border-border bg-surface/70 p-3">
               <div className="flex items-center gap-2">
-                <StatusDot phase={phase} everConnected={everConnected} />
+                <StatusDot phase={phase} everConnected={everConnected} abnormalDisconnect={abnormalDisconnect} />
                 <span className="text-xs font-medium text-text">{t(label)}</span>
               </div>
               <dl className="mt-2 space-y-1 text-[11px]">

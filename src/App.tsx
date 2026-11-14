@@ -279,6 +279,7 @@ export default function App() {
         onNavigate={handleNavigate}
         phase={engine.phase}
         everConnected={everConnected}
+        abnormalDisconnect={engine.abnormalDisconnect}
         label={engine.label}
         vip={engine.stats.vip}
         version={infoQuery.data ? `v${infoQuery.data.version}` : ""}
@@ -297,6 +298,7 @@ export default function App() {
             engine={engine}
             session={summary}
             everConnected={everConnected}
+            abnormalDisconnect={engine.abnormalDisconnect}
             connecting={connect.isPending}
             onConnect={handleConnect}
             onDisconnect={() =>
