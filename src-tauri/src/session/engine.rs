@@ -241,8 +241,8 @@ impl Engine {
             label: phase.label().to_string(),
             detail,
         });
-        // 托盘图标跟随连接状态：仅 Connected 显示已连接样式，重连/断开时回到未连接样式
-        crate::tray_status::set_connected(&self.app, phase == Phase::Connected);
+        // 托盘图标跟随连接状态：未连接灰、已连接绿、连接过之后断开橙
+        crate::tray_status::update_for_phase(&self.app, phase == Phase::Connected);
     }
 
     fn log(&self, message: impl Into<String>) {

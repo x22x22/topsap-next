@@ -38,6 +38,7 @@ use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
 use tauri::{Manager, RunEvent, WindowEvent};
 
 use session::Engine;
+use tray_status::TrayState;
 
 pub struct AppState {
     pub engine: Arc<Engine>,
@@ -256,7 +257,7 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
     let menu = Menu::with_items(app, &[&show, &disconnect, &quit])?;
 
     let mut builder = TrayIconBuilder::with_id(tray_status::TRAY_ID)
-        .tooltip(tray_status::tooltip(false))
+        .tooltip(TrayState::Idle.tooltip())
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
@@ -282,8 +283,8 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
             }
         });
 
-    // 托盘图标用状态色区分连接状态；未连接时展示灰色空心圆环
-    if let Some(icon) = tray_status::icon(false) {
+    // 托盘图标保留原应用图标形状，按连接状态着色（未连接=灰）
+    if let Some(icon) = tray_status::init(app.handle()) {
         builder = builder.icon(icon);
     } else if let Some(icon) = app.default_window_icon().cloned() {
         builder = builder.icon(icon);
